@@ -111,6 +111,17 @@ async function main() {
           })),
           { type: 'paragraph', content: [{ type: 'text', text: 'A distant paragraph about badgers.' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'Another distant paragraph about otters.' }] },
+          // Carries a definition, a requirement and a citation, so the local
+          // extraction rules have something real to find.
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'A supervisory control means a check performed by a competent person [7]. The operator shall record every such check.',
+              },
+            ],
+          },
         ],
       },
     }),
@@ -581,6 +592,20 @@ async function main() {
 
   const empty = await json(`/api/documents/${id}/search?q=`);
   check('an empty query returns nothing', (empty.hits?.length ?? 0) === 0);
+
+  const defining = await json(
+    `/api/documents/${id}/search?q=${encodeURIComponent('supervisory control')}`,
+  );
+  check(
+    'the paragraph defining a queried term comes first',
+    defining.hits?.[0]?.nodeId === blockIds[65],
+    defining.hits?.[0]?.nodeId,
+  );
+  check(
+    'and is flagged as defining it',
+    defining.hits?.[0]?.signals?.definition === true,
+    JSON.stringify(defining.hits?.[0]?.signals),
+  );
 
   console.log('\nBriefs reach the Context Builder');
   const withBriefs = await json('/api/ai/ask', {
