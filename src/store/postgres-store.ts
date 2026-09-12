@@ -18,6 +18,8 @@ import {
   newConversationId,
   newDocumentId,
   newEmbeddingId,
+  newImpactAnalysisId,
+  newImpactId,
   newMessageId,
   newSemanticUnitId,
   newSuggestionRecordId,
@@ -39,6 +41,12 @@ import type {
   MessageRecord,
   MessageRole,
   EmbeddingRecord,
+  ImpactAnalysisRecord,
+  ImpactRecord,
+  ImpactSeverity,
+  ImpactStatusValue,
+  ImpactType,
+  RecommendedAction,
   EmbeddingType,
   IndexStatus,
   IndexStatusReport,
@@ -59,12 +67,16 @@ import {
   SuggestionNotFoundError,
   SuggestionResolvedError,
   SuggestionStaleError,
+  ImpactAnalysisNotFoundError,
+  ImpactNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
   type CreateConversationInput,
   type CreateDocumentInput,
   type CreateSuggestionInput,
+  type CompleteImpactAnalysisInput,
+  type CreateImpactAnalysisInput,
   type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
@@ -1165,6 +1177,159 @@ export class PostgresStore implements Store {
       semanticUnits: units[0]?.count ?? 0,
     };
   }
+
+  // ---- Impact analysis ----------------------------------------------------
+
+  async createImpactAnalysis(
+    documentId: string,
+    input: CreateImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord> {
+    const rows = await this.query(
+      `insert into impact_analyses
+           (id, document_id, base_checkpoint_id, target_revision, status, clusters, retrieval,
+            changes_analysed, changes_filtered)
+       values ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
+       returning *`,
+      [
+        newImpactAnalysisId(),
+        documentId,
+        input.baseCheckpointId,
+        input.targetRevision,
+        JSON.stringify(input.clusters),
+        JSON.stringify(input.retrieval),
+        input.changesAnalysed,
+        input.changesFiltered,
+      ],
+    );
+    return toImpactAnalysis(rows[0]);
+  }
+
+  async completeImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+    input: CompleteImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord> {
+    return this.transaction(async (client) => {
+      const updated = await client.query(
+        `update impact_analyses
+            set status = $3, summary = $4, provider = $5, model = $6,
+                input_tokens = $7, output_tokens = $8, error = $9, completed_at = now()
+          where document_id = $1 and id = $2
+          returning *`,
+        [
+          documentId,
+          analysisId,
+          input.status,
+          input.summary,
+          input.provider,
+          input.model,
+          input.inputTokens,
+          input.outputTokens,
+          input.error ?? null,
+        ],
+      );
+      if (updated.rows.length === 0) throw new ImpactAnalysisNotFoundError(analysisId);
+
+      for (const impact of input.impacts) {
+        await client.query(
+          `insert into impacts
+               (id, impact_analysis_id, document_id, source_change_ids, source_cluster_id,
+                target_block_id, target_text, impact_type, confidence, severity, explanation,
+                recommended_action, status)
+           values ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12, 'pending')`,
+          [
+            newImpactId(),
+            analysisId,
+            documentId,
+            impact.sourceChangeIds,
+            impact.sourceClusterId,
+            impact.targetBlockId,
+            impact.targetText,
+            impact.impactType,
+            impact.confidence,
+            impact.severity,
+            impact.explanation,
+            impact.recommendedAction,
+          ],
+        );
+      }
+
+      return toImpactAnalysis(updated.rows[0]);
+    });
+  }
+
+  async getImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+  ): Promise<{ analysis: ImpactAnalysisRecord; impacts: ImpactRecord[] } | null> {
+    const rows = await this.query(
+      'select * from impact_analyses where document_id = $1 and id = $2',
+      [documentId, analysisId],
+    );
+    if (rows.length === 0) return null;
+
+    return {
+      analysis: toImpactAnalysis(rows[0]),
+      impacts: await this.listImpacts(documentId, { analysisId }),
+    };
+  }
+
+  async listImpactAnalyses(documentId: string): Promise<ImpactAnalysisRecord[]> {
+    const rows = await this.query(
+      'select * from impact_analyses where document_id = $1 order by created_at desc',
+      [documentId],
+    );
+    return rows.map(toImpactAnalysis);
+  }
+
+  async listImpacts(
+    documentId: string,
+    options: { analysisId?: string; statuses?: ImpactStatusValue[] } = {},
+  ): Promise<ImpactRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from impacts where document_id = $1';
+
+    if (options.analysisId) {
+      values.push(options.analysisId);
+      sql += ` and impact_analysis_id = $${values.length}`;
+    }
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+    sql += ' order by created_at asc';
+
+    return (await this.query(sql, values)).map(toImpact);
+  }
+
+  async setImpactStatus(
+    documentId: string,
+    impactId: string,
+    input: { status: ImpactStatusValue; resolvedBy: string; suggestionId?: string | null },
+  ): Promise<ImpactRecord> {
+    const pending = input.status === 'pending';
+    const rows = await this.query(
+      `update impacts
+          set status        = $3,
+              suggestion_id = coalesce($4, suggestion_id),
+              resolved_by   = case when $5::boolean then null else $6 end,
+              resolved_at   = case when $5::boolean then null else now() end
+        where document_id = $1 and id = $2
+        returning *`,
+      [documentId, impactId, input.status, input.suggestionId ?? null, pending, input.resolvedBy],
+    );
+    if (rows.length === 0) throw new ImpactNotFoundError(impactId);
+    return toImpact(rows[0]);
+  }
+
+  async markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void> {
+    if (changeIds.length === 0) return;
+    await this.query(
+      `update changes set impact_status = 'analyzed'
+        where document_id = $1 and id = any ($2::text[])`,
+      [documentId, changeIds],
+    );
+  }
 }
 
 /** A proposal that has reached a terminal state cannot be resolved again. */
@@ -1215,6 +1380,50 @@ function toEmbedding(row: Row): EmbeddingRecord {
     model: row.model,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
+  };
+}
+
+function toImpactAnalysis(row: Row): ImpactAnalysisRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    baseCheckpointId: row.base_checkpoint_id,
+    targetRevision: row.target_revision,
+    status: row.status as ImpactAnalysisRecord['status'],
+    summary: row.summary,
+    clusters: row.clusters ?? [],
+    retrieval: row.retrieval ?? {},
+    changesAnalysed: row.changes_analysed,
+    changesFiltered: row.changes_filtered,
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    error: row.error,
+    createdAt: toIso(row.created_at),
+    completedAt: row.completed_at ? toIso(row.completed_at) : null,
+  };
+}
+
+function toImpact(row: Row): ImpactRecord {
+  return {
+    id: row.id,
+    impactAnalysisId: row.impact_analysis_id,
+    documentId: row.document_id,
+    sourceChangeIds: row.source_change_ids ?? [],
+    sourceClusterId: row.source_cluster_id,
+    targetBlockId: row.target_block_id,
+    targetText: row.target_text,
+    impactType: row.impact_type as ImpactType,
+    confidence: Number(row.confidence),
+    severity: row.severity as ImpactSeverity,
+    explanation: row.explanation,
+    recommendedAction: row.recommended_action as RecommendedAction,
+    status: row.status as ImpactStatusValue,
+    suggestionId: row.suggestion_id,
+    resolvedBy: row.resolved_by,
+    resolvedAt: row.resolved_at ? toIso(row.resolved_at) : null,
+    createdAt: toIso(row.created_at),
   };
 }
 

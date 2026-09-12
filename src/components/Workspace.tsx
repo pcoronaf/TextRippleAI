@@ -11,6 +11,9 @@ import type {
   CheckpointRecord,
   DocumentContent,
   DocumentRecord,
+  ImpactAnalysisRecord,
+  ImpactRecord,
+  ImpactStatusValue,
   IndexStatusReport,
   RetrievalHit,
 } from '@/core/types';
@@ -46,6 +49,11 @@ export function Workspace({
   const [trigger, setTrigger] = useState<{ action: AskAction; nonce: number } | null>(null);
   const [usage, setUsage] = useState<SessionUsage>({ calls: 0, inputTokens: 0, outputTokens: 0 });
   const editorRef = useRef<Editor | null>(null);
+
+  const [analysis, setAnalysis] = useState<ImpactAnalysisRecord | null>(null);
+  const [impacts, setImpacts] = useState<ImpactRecord[]>([]);
+  const [impactBusy, setImpactBusy] = useState(false);
+  const [impactError, setImpactError] = useState<string | null>(null);
 
   const [indexStatus, setIndexStatus] = useState<IndexStatusReport | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
@@ -161,6 +169,60 @@ export function Workspace({
     }));
   }, []);
 
+  const analyseImpact = useCallback(async () => {
+    setImpactBusy(true);
+    setImpactError(null);
+    try {
+      // Everything pending must reach the ledger first, or the analysis would
+      // examine a document the author has already moved past.
+      await flushAndSave();
+
+      const response = await fetch(`/api/documents/${record.id}/impact`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ since: scope }),
+      });
+
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `Analysis failed (${response.status})`);
+
+      setAnalysis(body.analysis);
+      setImpacts(body.impacts ?? []);
+      setUsage((previous) => ({
+        calls: previous.calls + (body.analysis?.model ? 1 : 0),
+        inputTokens: previous.inputTokens + (body.analysis?.inputTokens ?? 0),
+        outputTokens: previous.outputTokens + (body.analysis?.outputTokens ?? 0),
+      }));
+      await refresh();
+    } catch (cause) {
+      setImpactError(cause instanceof Error ? cause.message : 'Analysis failed');
+    } finally {
+      setImpactBusy(false);
+    }
+  }, [flushAndSave, record.id, refresh, scope]);
+
+  const resolveImpact = useCallback(
+    async (impactId: string, status: ImpactStatusValue) => {
+      setImpactBusy(true);
+      try {
+        const response = await fetch(`/api/documents/${record.id}/impacts/${impactId}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status }),
+        });
+        if (response.ok) {
+          const body = await response.json();
+          setImpacts((previous) =>
+            previous.map((impact) => (impact.id === impactId ? body.impact : impact)),
+          );
+        }
+      } finally {
+        setImpactBusy(false);
+      }
+    },
+    [record.id],
+  );
+
   const outline = useMemo(() => buildOutline(content), [content]);
 
   const scrollToBlock = useCallback((blockId: string) => {
@@ -260,6 +322,18 @@ export function Workspace({
               query: searchQuery,
               onQueryChange: setSearchQuery,
               results: searchResults,
+              onSelectBlock: scrollToBlock,
+            }}
+            impact={{
+              analysis,
+              impacts,
+              checkpoints,
+              scope,
+              onScopeChange: setScope,
+              busy: impactBusy,
+              error: impactError,
+              onAnalyse: () => void analyseImpact(),
+              onResolve: (impactId, status) => void resolveImpact(impactId, status),
               onSelectBlock: scrollToBlock,
             }}
           />

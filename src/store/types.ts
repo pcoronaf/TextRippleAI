@@ -20,8 +20,14 @@ import type {
   DraftChange,
   EmbeddingRecord,
   EmbeddingType,
+  ImpactAnalysisRecord,
+  ImpactRecord,
+  ImpactSeverity,
+  ImpactStatusValue,
+  ImpactType,
   IndexStatus,
   IndexStatusReport,
+  RecommendedAction,
   MessageRecord,
   MessageRole,
   SemanticUnitRecord,
@@ -185,6 +191,86 @@ export interface Store {
   searchVector(documentId: string, vector: number[], limit: number): Promise<VectorHit[]>;
 
   indexStatus(documentId: string): Promise<IndexStatusReport>;
+
+  // ---- Impact analysis (M5) -----------------------------------------------
+  //
+  // Findings only. There is no method here that writes document content, which
+  // is what makes "impact analysis does not edit the document" structural
+  // rather than a promise.
+
+  createImpactAnalysis(
+    documentId: string,
+    input: CreateImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord>;
+  completeImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+    input: CompleteImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord>;
+  getImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+  ): Promise<{ analysis: ImpactAnalysisRecord; impacts: ImpactRecord[] } | null>;
+  listImpactAnalyses(documentId: string): Promise<ImpactAnalysisRecord[]>;
+
+  listImpacts(
+    documentId: string,
+    options?: { analysisId?: string; statuses?: ImpactStatusValue[] },
+  ): Promise<ImpactRecord[]>;
+  setImpactStatus(
+    documentId: string,
+    impactId: string,
+    input: { status: ImpactStatusValue; resolvedBy: string; suggestionId?: string | null },
+  ): Promise<ImpactRecord>;
+
+  /** Mark ledger entries as having been through analysis. */
+  markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void>;
+}
+
+export interface CreateImpactAnalysisInput {
+  baseCheckpointId: string | null;
+  targetRevision: number;
+  clusters: ImpactAnalysisRecord['clusters'];
+  retrieval: ImpactAnalysisRecord['retrieval'];
+  changesAnalysed: number;
+  changesFiltered: number;
+}
+
+export interface CompleteImpactAnalysisInput {
+  status: 'completed' | 'failed';
+  summary: string;
+  provider: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  error?: string | null;
+  impacts: NewImpact[];
+}
+
+export interface NewImpact {
+  sourceChangeIds: string[];
+  sourceClusterId: string;
+  targetBlockId: string;
+  targetText: string;
+  impactType: ImpactType;
+  confidence: number;
+  severity: ImpactSeverity;
+  explanation: string;
+  recommendedAction: RecommendedAction;
+}
+
+export class ImpactAnalysisNotFoundError extends Error {
+  constructor(readonly analysisId: string) {
+    super(`Impact analysis ${analysisId} not found`);
+    this.name = 'ImpactAnalysisNotFoundError';
+  }
+}
+
+export class ImpactNotFoundError extends Error {
+  constructor(readonly impactId: string) {
+    super(`Impact ${impactId} not found`);
+    this.name = 'ImpactNotFoundError';
+  }
 }
 
 export interface SummaryUpsert {

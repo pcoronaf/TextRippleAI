@@ -26,6 +26,8 @@ import {
   newConversationId,
   newDocumentId,
   newEmbeddingId,
+  newImpactAnalysisId,
+  newImpactId,
   newMessageId,
   newSemanticUnitId,
   newSuggestionRecordId,
@@ -41,6 +43,9 @@ import type {
   DocumentRecord,
   DocumentWithContent,
   EmbeddingRecord,
+  ImpactAnalysisRecord,
+  ImpactRecord,
+  ImpactStatusValue,
   IndexStatusReport,
   MessageRecord,
   SemanticUnitRecord,
@@ -58,12 +63,16 @@ import {
   SuggestionNotFoundError,
   SuggestionResolvedError,
   SuggestionStaleError,
+  ImpactAnalysisNotFoundError,
+  ImpactNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
   type CreateConversationInput,
   type CreateSuggestionInput,
   type CreateDocumentInput,
+  type CompleteImpactAnalysisInput,
+  type CreateImpactAnalysisInput,
   type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
@@ -96,6 +105,8 @@ interface DocumentFile {
   summaries?: SummaryRecord[];
   embeddings?: EmbeddingRecord[];
   semanticUnits?: SemanticUnitRecord[];
+  impactAnalyses?: ImpactAnalysisRecord[];
+  impacts?: ImpactRecord[];
 }
 
 /**
@@ -914,6 +925,181 @@ export class FileStore implements Store {
       semanticUnits: (data.semanticUnits ?? []).length,
     };
   }
+
+  // ---- Impact analysis ----------------------------------------------------
+
+  async createImpactAnalysis(
+    documentId: string,
+    input: CreateImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const analysis: ImpactAnalysisRecord = {
+        id: newImpactAnalysisId(),
+        documentId,
+        baseCheckpointId: input.baseCheckpointId,
+        targetRevision: input.targetRevision,
+        status: 'running',
+        summary: '',
+        clusters: input.clusters,
+        retrieval: input.retrieval,
+        changesAnalysed: input.changesAnalysed,
+        changesFiltered: input.changesFiltered,
+        provider: null,
+        model: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        error: null,
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+      };
+
+      await this.write({
+        ...data,
+        impactAnalyses: [...(data.impactAnalyses ?? []), analysis],
+      });
+
+      return analysis;
+    });
+  }
+
+  async completeImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+    input: CompleteImpactAnalysisInput,
+  ): Promise<ImpactAnalysisRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const analyses = data.impactAnalyses ?? [];
+      const existing = analyses.find((entry) => entry.id === analysisId);
+      if (!existing) throw new ImpactAnalysisNotFoundError(analysisId);
+
+      const now = new Date().toISOString();
+      const analysis: ImpactAnalysisRecord = {
+        ...existing,
+        status: input.status,
+        summary: input.summary,
+        provider: input.provider,
+        model: input.model,
+        inputTokens: input.inputTokens,
+        outputTokens: input.outputTokens,
+        error: input.error ?? null,
+        completedAt: now,
+      };
+
+      const impacts: ImpactRecord[] = input.impacts.map((impact) => ({
+        id: newImpactId(),
+        impactAnalysisId: analysisId,
+        documentId,
+        ...impact,
+        status: 'pending' as const,
+        suggestionId: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: now,
+      }));
+
+      await this.write({
+        ...data,
+        impactAnalyses: analyses.map((entry) => (entry.id === analysisId ? analysis : entry)),
+        impacts: [...(data.impacts ?? []), ...impacts],
+      });
+
+      return analysis;
+    });
+  }
+
+  async getImpactAnalysis(
+    documentId: string,
+    analysisId: string,
+  ): Promise<{ analysis: ImpactAnalysisRecord; impacts: ImpactRecord[] } | null> {
+    const data = await this.read(documentId);
+    if (!data) return null;
+
+    const analysis = (data.impactAnalyses ?? []).find((entry) => entry.id === analysisId);
+    if (!analysis) return null;
+
+    return {
+      analysis,
+      impacts: (data.impacts ?? []).filter((entry) => entry.impactAnalysisId === analysisId),
+    };
+  }
+
+  async listImpactAnalyses(documentId: string): Promise<ImpactAnalysisRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return [...(data.impactAnalyses ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listImpacts(
+    documentId: string,
+    options: { analysisId?: string; statuses?: ImpactStatusValue[] } = {},
+  ): Promise<ImpactRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.impacts ?? [])
+      .filter((entry) => !options.analysisId || entry.impactAnalysisId === options.analysisId)
+      .filter((entry) => !options.statuses || options.statuses.includes(entry.status));
+  }
+
+  async setImpactStatus(
+    documentId: string,
+    impactId: string,
+    input: { status: ImpactStatusValue; resolvedBy: string; suggestionId?: string | null },
+  ): Promise<ImpactRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const impacts = data.impacts ?? [];
+      const existing = impacts.find((entry) => entry.id === impactId);
+      if (!existing) throw new ImpactNotFoundError(impactId);
+
+      const updated: ImpactRecord = {
+        ...existing,
+        status: input.status,
+        suggestionId: input.suggestionId ?? existing.suggestionId,
+        resolvedBy: input.status === 'pending' ? null : input.resolvedBy,
+        resolvedAt: input.status === 'pending' ? null : new Date().toISOString(),
+      };
+
+      await this.write({
+        ...data,
+        impacts: impacts.map((entry) => (entry.id === impactId ? updated : entry)),
+      });
+
+      return updated;
+    });
+  }
+
+  async markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void> {
+    if (changeIds.length === 0) return;
+
+    await this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const target = new Set(changeIds);
+      await this.write({
+        ...data,
+        changes: data.changes.map((change) =>
+          target.has(change.id) ? { ...change, impactStatus: 'analyzed' as const } : change,
+        ),
+      });
+    });
+  }
+}
+
+/** Impact-analysis methods, appended to the file store. */
+export interface StoredImpactData {
+  impactAnalyses?: ImpactAnalysisRecord[];
+  impacts?: ImpactRecord[];
 }
 
 /** Which summaries a document ought to have, by type. */

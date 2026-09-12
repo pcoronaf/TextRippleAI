@@ -629,6 +629,148 @@ async function main() {
     `${withBriefs.context.totalTokens}`,
   );
 
+  console.log('\nImpact analysis');
+  const revisionBeforeAnalysis = await revisionOf();
+
+  // A terminology sweep across two paragraphs, leaving a third behind.
+  const sweepBase = await json(`/api/documents/${id}`);
+  let sweepContent = editBlock(
+    sweepBase.content,
+    blockIds[63],
+    'A distant paragraph about supervisory control in the field.',
+  );
+  sweepContent = editBlock(
+    sweepContent,
+    blockIds[64],
+    'Another distant paragraph about supervisory control at sea.',
+  );
+
+  await json(`/api/documents/${id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: sweepContent,
+      expectedRevision: sweepBase.document.currentRevision,
+      changes: [
+        {
+          ...draft(
+            blockIds[63],
+            'A distant paragraph about badgers.',
+            'A distant paragraph about supervisory control in the field.',
+          ),
+          classification: 'terminology',
+        },
+        {
+          ...draft(
+            blockIds[64],
+            'Another distant paragraph about otters.',
+            'Another distant paragraph about supervisory control at sea.',
+          ),
+          classification: 'terminology',
+        },
+        {
+          ...draft(blockIds[5], 'spacing  here', 'spacing here'),
+          classification: 'typographical',
+        },
+      ],
+    }),
+  });
+
+  const analysed = await json(`/api/documents/${id}/impact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+
+  const analysis = analysed.analysis;
+  check('the analysis completed', analysis?.status === 'completed', analysis?.status);
+  check('it produced a briefing summary', Boolean(analysis?.summary));
+  check(
+    'typographical changes were filtered out',
+    analysis?.changesFiltered >= 1,
+    `${analysis?.changesFiltered}`,
+  );
+  check(
+    'the ledger entries collapsed into fewer conceptual changes',
+    analysis?.clusters?.length > 0 && analysis.clusters.length < analysis.changesAnalysed,
+    `${analysis?.clusters?.length} clusters from ${analysis?.changesAnalysed} changes`,
+  );
+  check(
+    'most of the document was ruled out before reasoning',
+    analysis?.retrieval?.reductionPercent > 80,
+    `${analysis?.retrieval?.reductionPercent}%`,
+  );
+  check(
+    'the passages examined are a small subset',
+    analysis?.retrieval?.candidatesConsidered < analysis?.retrieval?.blocksInDocument,
+    `${analysis?.retrieval?.candidatesConsidered} of ${analysis?.retrieval?.blocksInDocument}`,
+  );
+
+  check('findings were recorded', (analysed.impacts?.length ?? 0) > 0, `${analysed.impacts?.length}`);
+  const finding = analysed.impacts?.[0];
+  check('a finding names the passage it concerns', Boolean(finding?.targetBlockId));
+  check('a finding explains itself', Boolean(finding?.explanation));
+  check('a finding carries severity and confidence', Boolean(finding?.severity) && finding?.confidence >= 0);
+  check('a finding points back at the changes that caused it', (finding?.sourceChangeIds?.length ?? 0) > 0);
+  check('a finding starts unresolved', finding?.status === 'pending');
+  check(
+    'the changed paragraphs are not offered as their own consequences',
+    !analysed.impacts.some((impact) => [blockIds[63], blockIds[64]].includes(impact.targetBlockId)),
+  );
+
+  // The save above advanced the revision by one; analysis must not advance it
+  // further. This is the acceptance criterion the whole milestone rests on.
+  const revisionAfterAnalysis = await revisionOf();
+  check(
+    'analysis did not edit the document',
+    revisionAfterAnalysis === revisionBeforeAnalysis + 1,
+    `revision ${revisionAfterAnalysis}, expected ${revisionBeforeAnalysis + 1}`,
+  );
+
+  const ledgerAfter = await json(`/api/documents/${id}/changes`);
+  check(
+    'analysed changes are marked as such',
+    ledgerAfter.changes.some((change) => change.impactStatus === 'analyzed'),
+  );
+
+  console.log('\nResolving a finding');
+  const dismissed = await json(`/api/documents/${id}/impacts/${finding.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'dismissed' }),
+  });
+  check('a finding can be dismissed', dismissed.impact?.status === 'dismissed');
+  check('and records who resolved it', Boolean(dismissed.impact?.resolvedAt));
+
+  const badStatus = await api(`/api/documents/${id}/impacts/${finding.id}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'invented' }),
+  });
+  check('an unknown resolution is rejected', badStatus.status === 400);
+
+  const reread = await json(`/api/documents/${id}/impact/${analysis.id}`);
+  check('a briefing can be re-read later', reread.analysis?.id === analysis.id);
+  check('with its findings and their resolutions', reread.impacts?.[0]?.status === 'dismissed');
+
+  const analyses = await json(`/api/documents/${id}/impact`);
+  check('past analyses are listed', (analyses.analyses?.length ?? 0) >= 1);
+
+  // A document with nothing to analyse should say so rather than spend a
+  // reasoning call finding nothing.
+  const fresh = await json('/api/documents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'Untouched' }),
+  });
+  const emptyAnalysis = await api(`/api/documents/${fresh.document.id}/impact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  check('analysing a document with no changes is refused', emptyAnalysis.status === 400);
+  await api(`/api/documents/${fresh.document.id}`, { method: 'DELETE' });
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

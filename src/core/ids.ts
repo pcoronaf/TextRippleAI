@@ -62,3 +62,5 @@ export const newSuggestionRecordId = () => newId('sug');
 export const newSummaryId = () => newId('sum');
 export const newEmbeddingId = () => newId('emb');
 export const newSemanticUnitId = () => newId('unit');
+export const newImpactAnalysisId = () => newId('ia');
+export const newImpactId = () => newId('imp');

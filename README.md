@@ -12,12 +12,13 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 - M4 complete
+## Status: M0 - M5 complete
 
-This repository implements the first five milestones — the document core, change intelligence,
-selection-anchored conversation, controlled AI editing, and a semantic index. **No LLM is called anywhere in the
-editing path, and no model output reaches the document without the author accepting it.** Both
-rules are enforced by a test over the dependency graph, not by convention.
+This repository implements the first six milestones — the document core, change intelligence,
+selection-anchored conversation, controlled AI editing, a semantic index, and impact analysis.
+**No LLM is called anywhere in the editing path, and no model output reaches the document without
+the author accepting it.** Both rules are enforced by a test over the dependency graph, not by
+convention.
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -26,7 +27,7 @@ rules are enforced by a test over the dependency graph, not by convention.
 | **M2** | Chat with selection: floating toolbar, Context Builder, anchored conversations, token logging | ✅ built |
 | **M3** | AI editing: proposals, diff review, accept/reject/discuss/revise, full provenance | ✅ built |
 | **M4** | Semantic index: hierarchical summaries, pgvector embeddings, hybrid retrieval, staleness tracking | ✅ built |
-| M5 | Impact analysis — candidate retrieval, ranking, impact briefing | not started |
+| **M5** | Impact analysis: clustering, candidate retrieval, ranked findings, impact briefing | ✅ built |
 | M6–M8 | Propagation, decision memory, advanced document capabilities | not started |
 
 ### What works today
@@ -54,6 +55,11 @@ rules are enforced by a test over the dependency graph, not by convention.
 - **Search** the document by exact terminology, by meaning, or both fused together — and those
   briefs now travel with every AI request, so a paragraph-level question is answered with
   document-level awareness.
+- **Analyse accumulated changes** and get a briefing: the ledger entries collapsed into the
+  conceptual changes they represent, the passages elsewhere that may depend on them, and why —
+  each with a severity, a confidence and a recommended action. Over 80% of the document is ruled
+  out before the reasoning model sees anything. Nothing is edited; you resolve each finding
+  yourself, and a dismissal is kept as review history.
 
 ---
 
@@ -174,6 +180,10 @@ POST   /api/documents/:id/checkpoints      create
 GET    /api/documents/:id/export           ?format=docx|md|txt|json
 GET    /api/documents/:id/conversations     list, ?anchor=<blockId>
 GET    /api/documents/:id/conversations/:cid  one conversation with its turns
+GET    /api/documents/:id/impact           past analyses
+POST   /api/documents/:id/impact           analyse accumulated changes (edits nothing)
+GET    /api/documents/:id/impact/:aid      one briefing with its findings
+POST   /api/documents/:id/impacts/:iid     resolve a finding
 GET    /api/documents/:id/index            what the index holds and what is stale
 POST   /api/documents/:id/index            refresh whatever is stale
 GET    /api/documents/:id/search           hybrid retrieval, ?q= &mode= &limit=

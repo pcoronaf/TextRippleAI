@@ -7,6 +7,7 @@ import type { ChangeRecord, ChangesSinceSummary, CheckpointRecord } from '@/core
 
 import { AskPanel, type AskPanelProps } from './AskPanel';
 import { DiffView } from './DiffView';
+import { ImpactPanel, type ImpactPanelProps } from './ImpactPanel';
 import { IndexPanel, type IndexPanelProps } from './IndexPanel';
 
 export type SidebarTab = 'changes' | 'checkpoints' | 'ask' | 'index' | 'impact' | 'decisions';
@@ -27,6 +28,7 @@ export interface ReviewSidebarProps {
   onTabChange: (tab: SidebarTab) => void;
   ask: AskPanelProps;
   index: IndexPanelProps;
+  impact: ImpactPanelProps;
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -67,14 +69,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
       {tab === 'checkpoints' && <CheckpointsPanel {...props} />}
       {tab === 'ask' && <AskPanel {...props.ask} />}
       {tab === 'index' && <IndexPanel {...props.index} />}
-      {tab === 'impact' && (
-        <div className="panel">
-          <p className="panel-note">
-            Impact analysis arrives in M5. It depends on the Change Ledger and stable node
-            identities being reliable first - which is what this milestone establishes.
-          </p>
-        </div>
-      )}
+      {tab === 'impact' && <ImpactPanel {...props.impact} />}
       {tab === 'decisions' && (
         <div className="panel">
           <p className="panel-note">

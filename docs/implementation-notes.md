@@ -373,3 +373,96 @@ inside `src/ai` would have been shorter and would have quietly broken both guara
   heavily capitalised prose.
 - **The file store's lexical search is term overlap**, not BM25, so ranking between two blocks that
   both match every term is arbitrary. PostgreSQL ranks properly.
+
+---
+
+# M5 — Impact analysis
+
+## Decisions
+
+### Search for what the change moved away from
+
+The central move of candidate retrieval is not "find passages like the new text". It is: take the
+terminology the change *removed*, and find everywhere in the document still saying it. A
+terminology sweep is defined by what it leaves behind, and that is a lexical question with an exact
+answer, not a similarity question with a fuzzy one.
+
+Semantic similarity is still run, but it is the weakest arm. A passage that still uses the old term
+is evidence; a passage that merely sounds alike is a guess, and the weights say so.
+
+### Clustering before reasoning, not after
+
+Fifty ledger entries from one sweep become one conceptual change before anything is retrieved or
+reasoned about. Two rules do it, both local and free:
+
+1. A focused vocabulary swap (at most three content words each way) clusters with every other
+   change making the same swap, wherever in the document it happened.
+2. Anything else clusters by block, so repeated work on one passage is one conceptual change.
+
+Without this, a sweep would produce fifty retrievals and fifty reasoning calls to answer one
+question, and the answers would disagree with each other.
+
+### The reduction is the point, and it is reported
+
+Everything before the model exists to shrink what the model sees. The analysis record stores
+`blocksInDocument`, `candidatesConsidered` and the resulting `reductionPercent`, and the UI shows
+it. The spec's target is over 80%; making the number visible is what stops retrieval from quietly
+degrading into "send everything" as the ranking signals are tuned.
+
+### Findings about passages that were never shown are dropped
+
+The reply parser discards any finding citing a candidate number outside the range that was sent. A
+model that invents a passage is hallucinating, and a fabricated finding costs the author more than
+a missing one - it has to be read and dismissed before it can be ignored. Unknown enum values fall
+back to the safest reading (`other`, `low`, `review`) rather than discarding an otherwise usable
+finding.
+
+### A failed analysis leaves its changes pending
+
+If the model returns something unreadable, the analysis is recorded as `failed` with the reason,
+and the ledger entries are deliberately *not* marked analysed. Marking them would hide them from
+the next attempt, which is the one failure mode that would lose work silently.
+
+### An empty result is a real result
+
+If retrieval finds nothing, the analysis completes with a summary saying so and no reasoning call
+is made at all. If the model finds nothing among the candidates, that is reported as a finding-free
+briefing rather than padded. The prompt says this explicitly, because a briefing full of false
+positives gets ignored, and an ignored briefing is worse than a short one.
+
+### Impact analysis cannot edit the document
+
+There is no method on the store's impact surface that writes content, and `src/server/impact.ts`
+imports nothing that could. `generate_suggestion` is a *status* on a finding: it records that the
+author wants it acted on. Producing the proposal is M6, and it will go through the same
+suggestion workflow as every other AI edit - proposed, reviewed, accepted.
+
+### Dismissals are kept
+
+A resolved finding is updated, never deleted. The spec asks for dismissals to survive as review
+history, and M7 will need them: a decision not to propagate a change is exactly the reasoning that
+should stop the next analysis proposing it again.
+
+## Deviations from the spec
+
+| Spec | Here | Why |
+|---|---|---|
+| `decision_rule_weight` in the candidate score | Not present | Decisions arrive in M7. The weight would be a constant multiplied by nothing. |
+| Separate `POST /api/impact/:id/generate-suggestions` | Deferred to M6 | It is the propagation workflow, not the analysis. The status exists now so the intent can be recorded. |
+| Impact analyses keyed under `/api/impact` | Under `/api/documents/:id/impact` | Everything else is already scoped by document; a second top-level namespace would be the only exception. |
+
+## Known limitations
+
+- **One reasoning call per analysis.** All clusters and all candidates go in together. That is
+  cheaper and gives the model the cross-cluster view, but on a large analysis it means one long
+  request, and attribution of a finding to a specific cluster is only exact when there is one.
+- **Cross-reference detection matches heading titles textually.** "as discussed in Chapter 3" is
+  found only when the changed material sits under a heading whose title appears in the referring
+  text. Numbered references (§5.2) are not resolved to nodes.
+- **No confidence threshold.** Everything the model returns is stored. Filtering by confidence is a
+  UI decision that should be made after seeing real false-positive rates, not guessed at now.
+- **Re-analysing re-examines resolved findings.** A dismissed finding does not yet suppress the same
+  finding next time; that is what M7's decision memory is for.
+- **The candidate list is capped at 30 passages.** On a book with a pervasive term, the cap is doing
+  real work and the tail is invisible. The ranking is what decides which 30, so its weights matter
+  more than they look.

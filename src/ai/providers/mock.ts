@@ -35,12 +35,14 @@ export class MockProvider implements AiProvider {
   async complete(request: CompletionRequest): Promise<CompletionResult> {
     const last = request.messages[request.messages.length - 1]?.content ?? '';
 
-    // When the caller's contract asks for a tagged replacement, answer in that
-    // shape. It keeps the whole propose/review/accept path exercisable without
-    // an API key, which is the point of having a stub at all.
+    // When the caller's contract asks for a particular shape, answer in it.
+    // That keeps the propose/review/accept and analyse paths exercisable
+    // without an API key, which is the point of having a stub at all.
     const text = request.system?.includes('<replacement>')
       ? this.proposal(last)
-      : `[mock ${request.tier ?? 'fast'}] ${last.slice(0, 280)}`;
+      : request.system?.includes('"impacts"')
+        ? this.impactReply(last)
+        : `[mock ${request.tier ?? 'fast'}] ${last.slice(0, 280)}`;
 
     return {
       text,
@@ -48,6 +50,28 @@ export class MockProvider implements AiProvider {
       model: this.models[request.tier ?? 'fast'],
       usage: { inputTokens: 0, outputTokens: 0 },
     };
+  }
+
+  /**
+   * Flag the first two candidate passages, in the documented JSON shape.
+   *
+   * Deterministic rather than plausible: the point is to exercise the parsing,
+   * persistence and review path, not to imitate judgement.
+   */
+  private impactReply(message: string): string {
+    const candidates = [...message.matchAll(/### Candidate (\d+) - (\S+)/g)];
+
+    return JSON.stringify({
+      summary: `Deterministic stub: ${candidates.length} candidate passage(s) were considered.`,
+      impacts: candidates.slice(0, 2).map(([, number], index) => ({
+        candidate: Number(number),
+        impact_type: index === 0 ? 'terminology_consistency' : 'cross_reference',
+        severity: index === 0 ? 'high' : 'low',
+        confidence: index === 0 ? 0.9 : 0.4,
+        explanation: `Stub finding for candidate ${number}.`,
+        recommended_action: index === 0 ? 'revise' : 'review',
+      })),
+    });
   }
 
   /** Echo the passage back with a visible marker, in the documented format. */

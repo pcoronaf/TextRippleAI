@@ -8,6 +8,8 @@ import {
   SuggestionNotFoundError,
   SuggestionResolvedError,
   SuggestionStaleError,
+  ImpactAnalysisNotFoundError,
+  ImpactNotFoundError,
 } from '@/store';
 
 /**
@@ -22,6 +24,9 @@ export function handleError(error: unknown): NextResponse {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
   if (error instanceof ConversationNotFoundError) {
+    return NextResponse.json({ error: error.message }, { status: 404 });
+  }
+  if (error instanceof ImpactAnalysisNotFoundError || error instanceof ImpactNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
   if (error instanceof SuggestionNotFoundError) {

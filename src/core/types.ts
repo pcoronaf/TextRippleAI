@@ -359,3 +359,119 @@ export interface RetrievalHit {
     definition: boolean;
   };
 }
+
+// --------------------------------------------------------------------------
+// Impact analysis (M5)
+// --------------------------------------------------------------------------
+
+export type ImpactAnalysisStatus = 'running' | 'completed' | 'failed';
+
+/**
+ * What kind of consequence a change has downstream. These are the categories
+ * the reasoning model is asked to choose between; anything it cannot place is
+ * reported as `other` rather than forced into a category.
+ */
+export type ImpactType =
+  | 'terminology_consistency'
+  | 'definition_conflict'
+  | 'contradiction'
+  | 'cross_reference'
+  | 'numeric_dependency'
+  | 'citation'
+  | 'scope'
+  | 'conclusion_dependency'
+  | 'other';
+
+export type ImpactSeverity = 'high' | 'medium' | 'low';
+
+export type RecommendedAction = 'revise' | 'review' | 'no_change';
+
+/**
+ * Resolution of one finding.
+ *
+ *   PENDING ─┬─> DISMISSED            (not a real consequence)
+ *            ├─> ACCEPTED_NO_CHANGE   (real, but deliberately left alone)
+ *            ├─> NEEDS_REVIEW         (parked for a human pass)
+ *            └─> GENERATE_SUGGESTION  (M6 turns it into a proposal)
+ */
+export type ImpactStatusValue =
+  | 'pending'
+  | 'dismissed'
+  | 'accepted_no_change'
+  | 'needs_review'
+  | 'generate_suggestion';
+
+export interface ImpactAnalysisRecord {
+  id: string;
+  documentId: string;
+  /** The review boundary the analysis ran from; null means the whole ledger. */
+  baseCheckpointId: string | null;
+  targetRevision: number;
+  status: ImpactAnalysisStatus;
+  /** The briefing headline the model wrote. */
+  summary: string;
+  /** Conceptual changes the ledger entries collapsed into. */
+  clusters: {
+    id: string;
+    label: string;
+    classification: ChangeClassification;
+    changeIds: string[];
+    blockIds: string[];
+    size: number;
+  }[];
+  /** How much of the document reasoning actually looked at. */
+  retrieval: {
+    blocksInDocument: number;
+    candidatesConsidered: number;
+    /** Share of the document excluded before reasoning. */
+    reductionPercent: number;
+  };
+  changesAnalysed: number;
+  changesFiltered: number;
+  provider: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface ImpactRecord {
+  id: string;
+  impactAnalysisId: string;
+  documentId: string;
+  /** Ledger entries that caused this. */
+  sourceChangeIds: string[];
+  sourceClusterId: string;
+  targetBlockId: string;
+  /** Snapshot of the target text when the finding was made. */
+  targetText: string;
+  impactType: ImpactType;
+  confidence: number;
+  severity: ImpactSeverity;
+  explanation: string;
+  recommendedAction: RecommendedAction;
+  status: ImpactStatusValue;
+  /** Set in M6 when a finding becomes a proposal. */
+  suggestionId: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
+
+/** One retrieved block, with the signals that put it in front of the model. */
+export interface ImpactCandidate {
+  blockId: string;
+  text: string;
+  score: number;
+  signals: {
+    exactTerm: boolean;
+    definition: boolean;
+    crossReference: boolean;
+    citation: boolean;
+    numeric: boolean;
+    lexicalRank: number | null;
+    semanticRank: number | null;
+  };
+}
