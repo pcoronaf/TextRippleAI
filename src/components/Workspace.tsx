@@ -11,6 +11,8 @@ import type {
   CheckpointRecord,
   DocumentContent,
   DocumentRecord,
+  IndexStatusReport,
+  RetrievalHit,
 } from '@/core/types';
 
 import { EditorPane, type EditorSelection } from './EditorPane';
@@ -45,6 +47,11 @@ export function Workspace({
   const [usage, setUsage] = useState<SessionUsage>({ calls: 0, inputTokens: 0, outputTokens: 0 });
   const editorRef = useRef<Editor | null>(null);
 
+  const [indexStatus, setIndexStatus] = useState<IndexStatusReport | null>(null);
+  const [indexBusy, setIndexBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<RetrievalHit[]>([]);
+
   const refresh = useCallback(async () => {
     const query = new URLSearchParams();
     if (scope) query.set('since', scope);
@@ -58,7 +65,51 @@ export function Workspace({
     setChanges(ledger.changes ?? []);
     setSummary(ledger.summary ?? null);
     setCheckpoints(boundaries.checkpoints ?? []);
+
+    // Index freshness moves with the ledger: every saved edit invalidates
+    // something, and the status bar should say so.
+    const status = await fetch(`/api/documents/${record.id}/index`).then((response) =>
+      response.ok ? response.json() : null,
+    );
+    setIndexStatus(status);
   }, [hideTrivial, record.id, scope]);
+
+  const refreshIndex = useCallback(async () => {
+    setIndexBusy(true);
+    try {
+      const response = await fetch(`/api/documents/${record.id}/index`, { method: 'POST' });
+      if (response.ok) {
+        const report = await response.json();
+        setIndexStatus(report.status ?? null);
+        if (report.tokens) {
+          setUsage((previous) => ({
+            calls: previous.calls + (report.summariesWritten > 0 ? 1 : 0),
+            inputTokens: previous.inputTokens + report.tokens.input,
+            outputTokens: previous.outputTokens + report.tokens.output,
+          }));
+        }
+      }
+    } finally {
+      setIndexBusy(false);
+    }
+  }, [record.id]);
+
+  const runSearch = useCallback(
+    async (query: string) => {
+      if (!query.trim()) return setSearchResults([]);
+      setIndexBusy(true);
+      try {
+        const response = await fetch(
+          `/api/documents/${record.id}/search?q=${encodeURIComponent(query)}`,
+        );
+        const body = response.ok ? await response.json() : { hits: [] };
+        setSearchResults(body.hits ?? []);
+      } finally {
+        setIndexBusy(false);
+      }
+    },
+    [record.id],
+  );
 
   const { state, handleUpdate, flushAndSave, createCheckpoint, rebase } = useDocumentSession({
     documentId: record.id,
@@ -201,6 +252,16 @@ export function Workspace({
               onBeforeAccept: flushAndSave,
               onAccepted,
             }}
+            index={{
+              status: indexStatus,
+              busy: indexBusy,
+              onRefresh: () => void refreshIndex(),
+              onSearch: (query) => void runSearch(query),
+              query: searchQuery,
+              onQueryChange: setSearchQuery,
+              results: searchResults,
+              onSelectBlock: scrollToBlock,
+            }}
           />
         </aside>
       </div>
@@ -210,6 +271,15 @@ export function Workspace({
           {state.pendingCount} pending change{state.pendingCount === 1 ? '' : 's'}
         </span>
         <span>revision {state.revision}</span>
+        {indexStatus && (
+          <span title="Summaries whose text has moved on. Refresh the index when you need them.">
+            {indexStatus.summaries.reduce(
+              (sum, entry) => sum + entry.stale + entry.potentiallyStale,
+              0,
+            )}{' '}
+            stale summaries
+          </span>
+        )}
         <span>
           {checkpoints.length > 0
             ? `Last checkpoint: ${checkpoints[0].name}`

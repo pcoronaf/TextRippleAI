@@ -18,11 +18,19 @@ import type {
   DocumentRecord,
   DocumentWithContent,
   DraftChange,
+  EmbeddingRecord,
+  EmbeddingType,
+  IndexStatus,
+  IndexStatusReport,
   MessageRecord,
   MessageRole,
+  SemanticUnitRecord,
   SuggestionRecord,
   SuggestionStatus,
+  SummaryRecord,
+  SummaryType,
 } from '@/core/types';
+import type { DetectedUnit } from '@/core/semantics';
 
 export interface CreateDocumentInput {
   title?: string;
@@ -140,6 +148,74 @@ export interface Store {
     suggestionId: string,
     input: AcceptSuggestionInput,
   ): Promise<AcceptSuggestionResult>;
+
+  // ---- Semantic index (M4) ------------------------------------------------
+  //
+  // Invalidation is not exposed: editing a block marks its own derived
+  // artifacts stale as part of the same write that changed it. Nothing may
+  // leave the index claiming to be current when it is not.
+
+  listSummaries(
+    documentId: string,
+    options?: { types?: SummaryType[]; statuses?: IndexStatus[] },
+  ): Promise<SummaryRecord[]>;
+  upsertSummary(documentId: string, input: SummaryUpsert): Promise<SummaryRecord>;
+
+  listEmbeddings(
+    documentId: string,
+    options?: { statuses?: IndexStatus[]; nodeIds?: string[] },
+  ): Promise<EmbeddingRecord[]>;
+  upsertEmbedding(documentId: string, input: EmbeddingUpsert): Promise<EmbeddingRecord>;
+
+  listSemanticUnits(
+    documentId: string,
+    options?: { nodeIds?: string[]; types?: SemanticUnitRecord['unitType'][] },
+  ): Promise<SemanticUnitRecord[]>;
+  /** Replace every unit extracted from one block. */
+  replaceSemanticUnits(
+    documentId: string,
+    nodeId: string,
+    units: DetectedUnit[],
+    sourceRevision: number,
+  ): Promise<void>;
+
+  /** Exact-terminology retrieval: full-text search where the engine has it. */
+  searchText(documentId: string, query: string, limit: number): Promise<TextHit[]>;
+  /** Semantic retrieval over block embeddings. */
+  searchVector(documentId: string, vector: number[], limit: number): Promise<VectorHit[]>;
+
+  indexStatus(documentId: string): Promise<IndexStatusReport>;
+}
+
+export interface SummaryUpsert {
+  nodeId: string | null;
+  summaryType: SummaryType;
+  content: string;
+  sourceRevision: number;
+  provider: string | null;
+  model: string | null;
+}
+
+export interface EmbeddingUpsert {
+  nodeId: string;
+  embeddingType: EmbeddingType;
+  vector: number[];
+  contentHash: string;
+  sourceRevision: number;
+  provider: string | null;
+  model: string | null;
+}
+
+export interface TextHit {
+  nodeId: string;
+  text: string;
+  rank: number;
+}
+
+export interface VectorHit {
+  nodeId: string;
+  text: string;
+  similarity: number;
 }
 
 export interface CreateSuggestionInput {

@@ -10,6 +10,7 @@ import {
   tierFor,
   type AskAction,
 } from '@/ai/prompts';
+import { briefsFor } from '@/server/briefs';
 import { getStore } from '@/store';
 import { handleError } from '@/server/http';
 
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
       selectionText: typeof body.selectedText === 'string' ? body.selectedText : undefined,
       question,
       recentChanges: changes,
+      briefs: await briefsFor(documentId, loaded.content, blockId),
       history,
       budgetTokens: typeof body.budgetTokens === 'number' ? body.budgetTokens : undefined,
     });

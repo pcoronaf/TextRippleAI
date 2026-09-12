@@ -158,6 +158,90 @@ export function chapterIndex(content: DocumentContent): Map<string, OutlineItem 
   return index;
 }
 
+/** A heading and the blocks that belong under it. */
+export interface DocumentRegion {
+  headingId: string;
+  level: number;
+  title: string;
+  /** Text blocks under this heading, excluding the heading itself. */
+  blockIds: string[];
+}
+
+/**
+ * One region per heading: the blocks that follow it, up to the next heading of
+ * the same or a higher level.
+ *
+ * A level-1 region therefore covers a whole chapter including its subsections,
+ * and a level-2 region covers just that section - which is exactly the nesting
+ * the hierarchical summaries need.
+ */
+export function regions(content: DocumentContent): DocumentRegion[] {
+  const blocks = flattenBlocks(content);
+  const out: DocumentRegion[] = [];
+
+  blocks.forEach((block, index) => {
+    if (block.type !== 'heading') return;
+    const level = typeof block.attrs.level === 'number' ? (block.attrs.level as number) : 1;
+
+    const blockIds: string[] = [];
+    for (let cursor = index + 1; cursor < blocks.length; cursor++) {
+      const next = blocks[cursor];
+      if (next.type === 'heading') {
+        const nextLevel = typeof next.attrs.level === 'number' ? (next.attrs.level as number) : 1;
+        if (nextLevel <= level) break;
+        continue;
+      }
+      blockIds.push(next.id);
+    }
+
+    out.push({
+      headingId: block.id,
+      level,
+      title: block.text.trim() || 'Untitled section',
+      blockIds,
+    });
+  });
+
+  return out;
+}
+
+/**
+ * For each block, the headings it sits under: the nearest preceding heading of
+ * any level (its section) and the nearest level-1 heading (its chapter).
+ *
+ * This is what summary invalidation walks - a changed paragraph makes its
+ * section summary stale and its chapter summary potentially stale.
+ */
+export function enclosingHeadings(
+  content: DocumentContent,
+): Map<string, { sectionId: string | null; chapterId: string | null }> {
+  const index = new Map<string, { sectionId: string | null; chapterId: string | null }>();
+  let sectionId: string | null = null;
+  let chapterId: string | null = null;
+
+  for (const block of flattenBlocks(content)) {
+    if (block.type === 'heading') {
+      const level = typeof block.attrs.level === 'number' ? (block.attrs.level as number) : 1;
+      if (level === 1) {
+        chapterId = block.id;
+        sectionId = block.id;
+      } else {
+        sectionId = block.id;
+      }
+      // A heading belongs to the region above it, not to itself.
+      index.set(block.id, {
+        sectionId: level === 1 ? null : chapterId,
+        chapterId: level === 1 ? null : chapterId,
+      });
+      continue;
+    }
+
+    index.set(block.id, { sectionId, chapterId });
+  }
+
+  return index;
+}
+
 /** Document title derived from the first level-1 heading, when present. */
 export function inferTitle(content: DocumentContent, fallback = 'Untitled document'): string {
   const outline = buildOutline(content);

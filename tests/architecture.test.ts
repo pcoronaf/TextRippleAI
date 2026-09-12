@@ -63,7 +63,7 @@ describe('editing path is independent of the AI layer', () => {
       const allowed =
         caller.startsWith('app/api/') ||
         caller.startsWith('components/') ||
-        caller === 'server/http.ts';
+        caller.startsWith('server/');
       expect(allowed, `${caller} imports the AI layer`).toBe(true);
     }
   });

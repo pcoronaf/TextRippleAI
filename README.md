@@ -12,10 +12,10 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 - M3 complete
+## Status: M0 - M4 complete
 
-This repository implements the first four milestones — the document core, change intelligence,
-selection-anchored conversation, and controlled AI editing. **No LLM is called anywhere in the
+This repository implements the first five milestones — the document core, change intelligence,
+selection-anchored conversation, controlled AI editing, and a semantic index. **No LLM is called anywhere in the
 editing path, and no model output reaches the document without the author accepting it.** Both
 rules are enforced by a test over the dependency graph, not by convention.
 
@@ -25,7 +25,7 @@ rules are enforced by a test over the dependency graph, not by convention.
 | **M1** | Change intelligence: Change Aggregator, Change Ledger, checkpoints, change review | ✅ built |
 | **M2** | Chat with selection: floating toolbar, Context Builder, anchored conversations, token logging | ✅ built |
 | **M3** | AI editing: proposals, diff review, accept/reject/discuss/revise, full provenance | ✅ built |
-| M4 | Semantic index — summaries, pgvector embeddings, hybrid retrieval | schema groundwork only |
+| **M4** | Semantic index: hierarchical summaries, pgvector embeddings, hybrid retrieval, staleness tracking | ✅ built |
 | M5 | Impact analysis — candidate retrieval, ranking, impact briefing | not started |
 | M6–M8 | Propagation, decision memory, advanced document capabilities | not started |
 
@@ -47,6 +47,13 @@ rules are enforced by a test over the dependency graph, not by convention.
   and it writes a ledger entry carrying the prompt, the model and the proposal it came from.
 - Every turn shows **Show AI context**: the exact parts that were sent, their token counts, what
   share of the document that was, and what was deliberately withheld.
+- Build a **semantic index**: hierarchical briefs (section → chapter → document), block embeddings,
+  and locally extracted terms, definitions, claims and citations. Editing a paragraph marks its
+  embedding stale, its section brief stale and its chapter brief suspect — and nothing is
+  regenerated until you ask.
+- **Search** the document by exact terminology, by meaning, or both fused together — and those
+  briefs now travel with every AI request, so a paragraph-level question is answered with
+  document-level awareness.
 
 ---
 
@@ -69,12 +76,17 @@ npm run db:migrate
 npm run dev
 ```
 
-`DATABASE_URL` alone switches the store; nothing else changes. The schema in `db/migrations/`
-is the one from the design spec, including the full-text index that M4's hybrid retrieval needs.
+`DATABASE_URL` alone switches the store; nothing else changes. The schema is the one from the
+design spec, and needs the **pgvector** extension — it ships with the `pgvector/pgvector` images
+and is available on Neon, Supabase and RDS.
+
+The file store has no pgvector and no full-text index, so it scores lexical matches by term overlap
+and computes cosine similarity in process. Same interface, same results at this scale, much slower
+on a real manuscript.
 
 ### Configuring the AI gateway
 
-Nothing calls it yet, but it is selectable now:
+The provider is selectable:
 
 ```bash
 AI_PROVIDER=anthropic     # anthropic | openai | mock (default)
@@ -162,6 +174,9 @@ POST   /api/documents/:id/checkpoints      create
 GET    /api/documents/:id/export           ?format=docx|md|txt|json
 GET    /api/documents/:id/conversations     list, ?anchor=<blockId>
 GET    /api/documents/:id/conversations/:cid  one conversation with its turns
+GET    /api/documents/:id/index            what the index holds and what is stale
+POST   /api/documents/:id/index            refresh whatever is stale
+GET    /api/documents/:id/search           hybrid retrieval, ?q= &mode= &limit=
 GET    /api/documents/:id/suggestions      list, ?blockId= &status=
 GET    /api/documents/:id/suggestions/:sid one proposal
 POST   /api/documents/:id/suggestions/:sid/resolve   accept | reject | discuss

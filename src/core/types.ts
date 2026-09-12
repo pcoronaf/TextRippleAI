@@ -273,3 +273,89 @@ export interface SuggestionRecord {
   resolvedAt: string | null;
   createdAt: string;
 }
+
+// --------------------------------------------------------------------------
+// Semantic index (M4)
+// --------------------------------------------------------------------------
+
+export type SummaryType = 'document' | 'chapter' | 'section';
+
+/**
+ * Freshness of a derived artifact.
+ *
+ * `stale` means the text it describes has changed. `potentially_stale` means
+ * something below it changed - a chapter brief whose section moved on is
+ * probably still broadly right, and is not worth regenerating until something
+ * asks for it. Invalidate cheaply; recompute lazily.
+ */
+export type IndexStatus = 'current' | 'stale' | 'potentially_stale';
+
+export interface SummaryRecord {
+  id: string;
+  documentId: string;
+  /** The heading this summarises; null for the document brief. */
+  nodeId: string | null;
+  summaryType: SummaryType;
+  content: string;
+  /** Document revision the summary was generated from. */
+  sourceRevision: number;
+  status: IndexStatus;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EmbeddingType = 'block' | 'summary';
+
+export interface EmbeddingRecord {
+  id: string;
+  documentId: string;
+  nodeId: string;
+  embeddingType: EmbeddingType;
+  vector: number[];
+  /** Hash of the text the vector was computed from. */
+  contentHash: string;
+  sourceRevision: number;
+  status: IndexStatus;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SemanticUnitRecord {
+  id: string;
+  documentId: string;
+  nodeId: string;
+  unitType: 'term' | 'definition' | 'claim' | 'citation';
+  value: string;
+  context: string;
+  rule: string;
+  sourceRevision: number;
+  createdAt: string;
+}
+
+/** What the index holds and what has gone out of date. */
+export interface IndexStatusReport {
+  documentId: string;
+  revision: number;
+  blocks: number;
+  embeddings: { current: number; stale: number; missing: number };
+  summaries: { type: SummaryType; current: number; stale: number; potentiallyStale: number; missing: number }[];
+  semanticUnits: number;
+}
+
+/** One retrieval hit, with the signals that produced it. */
+export interface RetrievalHit {
+  nodeId: string;
+  text: string;
+  score: number;
+  signals: {
+    lexicalRank: number | null;
+    semanticRank: number | null;
+    semanticSimilarity: number | null;
+    exactTerm: boolean;
+    definition: boolean;
+  };
+}

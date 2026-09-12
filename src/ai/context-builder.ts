@@ -83,6 +83,12 @@ export interface BuildContextInput {
    * needs them in front of it every time.
    */
   resendSurroundings?: boolean;
+  /**
+   * Hierarchical summaries covering the selection, when the index holds current
+   * ones. This is what lets a paragraph-level question be answered with
+   * document-level awareness without sending the manuscript.
+   */
+  briefs?: { document?: string; chapter?: string; section?: string };
   budgetTokens?: number;
 }
 
@@ -125,6 +131,19 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
   // Resending it would pay for the same tokens twice.
   if (!isFollowUp) {
     candidates.push({ label: 'Where this sits', text: locate(input, blocks, index), priority: 1 });
+
+    // Briefs before neighbours: document-level awareness is worth more per
+    // token than one more adjacent paragraph.
+    const briefs = input.briefs ?? {};
+    if (briefs.document?.trim()) {
+      candidates.push({ label: 'Document brief', text: briefs.document.trim(), priority: 1 });
+    }
+    if (briefs.section?.trim()) {
+      candidates.push({ label: 'Section brief', text: briefs.section.trim(), priority: 1 });
+    }
+    if (briefs.chapter?.trim() && briefs.chapter !== briefs.section) {
+      candidates.push({ label: 'Chapter brief', text: briefs.chapter.trim(), priority: 2 });
+    }
 
     const previous = blocks[index - 1];
     const next = blocks[index + 1];
@@ -173,9 +192,11 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
   if (isFollowUp) {
     omitted.push('Surrounding context (already present earlier in this conversation)');
   }
-  // Named explicitly so a missing brief reads as "not built yet", not as
-  // "this document has none".
-  omitted.push('Document and section summaries (built in M4)');
+  // Named explicitly so a missing brief reads as "the index has not caught up",
+  // not as "this document has no structure".
+  if (!isFollowUp && !included.some((entry) => entry.label.endsWith('brief'))) {
+    omitted.push('Hierarchical summaries (none current in the index yet - refresh it)');
+  }
   omitted.push('Applicable decisions (built in M7)');
 
   const documentTokens = estimateTokens(blocks.map((entry) => entry.text).join(' '));
@@ -192,6 +213,9 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
   // Restore prompt order: the selection reads better after its surroundings.
   const order = [
     'Where this sits',
+    'Document brief',
+    'Chapter brief',
+    'Section brief',
     'Previous paragraph',
     'Selected text',
     "The author's highlight",

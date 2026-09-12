@@ -10,15 +10,26 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { replaceBlockText } from '@/core/apply';
-import { emptyDocument, ensureNodeIds, flattenBlocks, inferTitle } from '@/core/document';
+import { planInvalidation } from '@/core/index-plan';
+import { cosineSimilarity } from '@/core/vector';
+import {
+  emptyDocument,
+  ensureNodeIds,
+  flattenBlocks,
+  inferTitle,
+  regions,
+} from '@/core/document';
 import { contentHash } from '@/core/hash';
 import {
   newChangeId,
   newCheckpointId,
   newConversationId,
   newDocumentId,
+  newEmbeddingId,
   newMessageId,
+  newSemanticUnitId,
   newSuggestionRecordId,
+  newSummaryId,
 } from '@/core/ids';
 import { classifyChange, isTrivial } from '@/core/classify';
 import type {
@@ -29,9 +40,15 @@ import type {
   DocumentNodeRecord,
   DocumentRecord,
   DocumentWithContent,
+  EmbeddingRecord,
+  IndexStatusReport,
   MessageRecord,
+  SemanticUnitRecord,
   SuggestionRecord,
+  SummaryRecord,
+  SummaryType,
 } from '@/core/types';
+import type { DetectedUnit } from '@/core/semantics';
 
 import { buildNodeRecords, toChangeRecords } from './records';
 import {
@@ -50,6 +67,9 @@ import {
   type ListChangesOptions,
   type ListSuggestionsOptions,
   type SaveDocumentInput,
+  type SummaryUpsert,
+  type TextHit,
+  type VectorHit,
   type SaveDocumentResult,
   type Store,
 } from './types';
@@ -68,10 +88,62 @@ interface DocumentFile {
   changes: ChangeRecord[];
   checkpoints: CheckpointRecord[];
   versions: StoredVersion[];
-  // Added in M2/M3; files written before then will not carry these.
+  // Added in M2/M3/M4; files written before then will not carry these.
   conversations?: ConversationRecord[];
   messages?: MessageRecord[];
   suggestions?: SuggestionRecord[];
+  summaries?: SummaryRecord[];
+  embeddings?: EmbeddingRecord[];
+  semanticUnits?: SemanticUnitRecord[];
+}
+
+/**
+ * Apply the invalidation a write implies.
+ *
+ * Called from every path that changes block text, so nothing can leave the
+ * index claiming to be current when the text beneath it has moved on. Blocks
+ * that disappeared take their derived artifacts with them.
+ */
+function invalidate(
+  data: DocumentFile,
+  content: DocumentContent,
+  changedNodeIds: string[],
+  removedNodeIds: string[],
+): Pick<DocumentFile, 'summaries' | 'embeddings' | 'semanticUnits'> {
+  const removed = new Set(removedNodeIds);
+
+  let embeddings = (data.embeddings ?? []).filter((entry) => !removed.has(entry.nodeId));
+  let summaries = (data.summaries ?? []).filter(
+    (entry) => entry.nodeId === null || !removed.has(entry.nodeId),
+  );
+  const semanticUnits = (data.semanticUnits ?? []).filter((entry) => !removed.has(entry.nodeId));
+
+  if (changedNodeIds.length === 0) return { summaries, embeddings, semanticUnits };
+
+  const plan = planInvalidation(content, changedNodeIds);
+  const staleBlocks = new Set(plan.staleBlockIds);
+  const staleSummaries = new Set(plan.staleSummaryNodeIds);
+  const suspectSummaries = new Set(plan.potentiallyStaleSummaryNodeIds);
+  const now = new Date().toISOString();
+
+  embeddings = embeddings.map((entry) =>
+    staleBlocks.has(entry.nodeId) ? { ...entry, status: 'stale' as const, updatedAt: now } : entry,
+  );
+
+  summaries = summaries.map((entry) => {
+    if (entry.nodeId && staleSummaries.has(entry.nodeId)) {
+      return { ...entry, status: 'stale' as const, updatedAt: now };
+    }
+    if (entry.nodeId && suspectSummaries.has(entry.nodeId)) {
+      return { ...entry, status: 'potentially_stale' as const, updatedAt: now };
+    }
+    if (entry.nodeId === null && plan.documentSummaryAffected && entry.status === 'current') {
+      return { ...entry, status: 'potentially_stale' as const, updatedAt: now };
+    }
+    return entry;
+  });
+
+  return { summaries, embeddings, semanticUnits };
 }
 
 /** Snapshots retained per document; checkpoint revisions are always kept. */
@@ -212,14 +284,24 @@ export class FileStore implements Store {
           index >= versions.length - MAX_RETAINED_VERSIONS,
       );
 
+      const nodes = buildNodeRecords(id, content, revision, data.nodes);
+      const surviving = new Set(nodes.map((node) => node.id));
+
       await this.write({
         ...data,
         document,
         content,
-        nodes: buildNodeRecords(id, content, revision, data.nodes),
+        nodes,
         changes: [...data.changes, ...changes],
         checkpoints: data.checkpoints,
         versions: retained,
+        // Derived artifacts go stale in the same write that moved the text.
+        ...invalidate(
+          data,
+          content,
+          nodes.filter((node) => node.revision === revision).map((node) => node.id),
+          data.nodes.filter((node) => !surviving.has(node.id)).map((node) => node.id),
+        ),
       });
 
       return { document, changes };
@@ -478,7 +560,7 @@ export class FileStore implements Store {
       const suggestions = data.suggestions ?? [];
       const current = suggestions.find((entry) => entry.id === suggestionId);
       if (!current) throw new SuggestionNotFoundError(suggestionId);
-      if (isResolved(current)) throw new SuggestionResolvedError(suggestionId, current.status);
+      if (isResolvedSuggestion(current)) throw new SuggestionResolvedError(suggestionId, current.status);
 
       const terminal = input.status === 'rejected' || input.status === 'revised';
       const updated: SuggestionRecord = {
@@ -509,7 +591,7 @@ export class FileStore implements Store {
       const suggestions = data.suggestions ?? [];
       const suggestion = suggestions.find((entry) => entry.id === suggestionId);
       if (!suggestion) throw new SuggestionNotFoundError(suggestionId);
-      if (isResolved(suggestion)) throw new SuggestionResolvedError(suggestionId, suggestion.status);
+      if (isResolvedSuggestion(suggestion)) throw new SuggestionResolvedError(suggestionId, suggestion.status);
 
       if (data.document.currentRevision !== input.expectedRevision) {
         throw new RevisionConflictError(input.expectedRevision, data.document.currentRevision);
@@ -586,23 +668,272 @@ export class FileStore implements Store {
           index >= versions.length - MAX_RETAINED_VERSIONS,
       );
 
+      const nodes = buildNodeRecords(documentId, content, revision, data.nodes);
+      const surviving = new Set(nodes.map((node) => node.id));
+
       await this.write({
         ...data,
         document,
         content,
-        nodes: buildNodeRecords(documentId, content, revision, data.nodes),
+        nodes,
         changes: [...data.changes, change],
         versions: retained,
         suggestions: suggestions.map((entry) => (entry.id === suggestionId ? accepted : entry)),
+        ...invalidate(
+          data,
+          content,
+          nodes.filter((node) => node.revision === revision).map((node) => node.id),
+          data.nodes.filter((node) => !surviving.has(node.id)).map((node) => node.id),
+        ),
       });
 
       return { document, content, change, suggestion: accepted };
     });
   }
+
+  // ---- Semantic index -----------------------------------------------------
+
+  async listSummaries(
+    documentId: string,
+    options: { types?: SummaryType[]; statuses?: IndexStatusReport['summaries'][number]['type'][] | string[] } = {},
+  ): Promise<SummaryRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.summaries ?? [])
+      .filter((entry) => !options.types || options.types.includes(entry.summaryType))
+      .filter(
+        (entry) => !options.statuses || (options.statuses as string[]).includes(entry.status),
+      );
+  }
+
+  async upsertSummary(documentId: string, input: SummaryUpsert): Promise<SummaryRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const summaries = data.summaries ?? [];
+      const now = new Date().toISOString();
+      const existing = summaries.find(
+        (entry) => entry.summaryType === input.summaryType && entry.nodeId === input.nodeId,
+      );
+
+      const record: SummaryRecord = {
+        id: existing?.id ?? newSummaryId(),
+        documentId,
+        nodeId: input.nodeId,
+        summaryType: input.summaryType,
+        content: input.content,
+        sourceRevision: input.sourceRevision,
+        status: 'current',
+        provider: input.provider,
+        model: input.model,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      await this.write({
+        ...data,
+        summaries: existing
+          ? summaries.map((entry) => (entry.id === existing.id ? record : entry))
+          : [...summaries, record],
+      });
+
+      return record;
+    });
+  }
+
+  async listEmbeddings(
+    documentId: string,
+    options: { statuses?: string[]; nodeIds?: string[] } = {},
+  ): Promise<EmbeddingRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.embeddings ?? [])
+      .filter((entry) => !options.statuses || options.statuses.includes(entry.status))
+      .filter((entry) => !options.nodeIds || options.nodeIds.includes(entry.nodeId));
+  }
+
+  async upsertEmbedding(documentId: string, input: EmbeddingUpsert): Promise<EmbeddingRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const embeddings = data.embeddings ?? [];
+      const now = new Date().toISOString();
+      const existing = embeddings.find(
+        (entry) => entry.nodeId === input.nodeId && entry.embeddingType === input.embeddingType,
+      );
+
+      const record: EmbeddingRecord = {
+        id: existing?.id ?? newEmbeddingId(),
+        documentId,
+        nodeId: input.nodeId,
+        embeddingType: input.embeddingType,
+        vector: input.vector,
+        contentHash: input.contentHash,
+        sourceRevision: input.sourceRevision,
+        status: 'current',
+        provider: input.provider,
+        model: input.model,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      await this.write({
+        ...data,
+        embeddings: existing
+          ? embeddings.map((entry) => (entry.id === existing.id ? record : entry))
+          : [...embeddings, record],
+      });
+
+      return record;
+    });
+  }
+
+  async listSemanticUnits(
+    documentId: string,
+    options: { nodeIds?: string[]; types?: SemanticUnitRecord['unitType'][] } = {},
+  ): Promise<SemanticUnitRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.semanticUnits ?? [])
+      .filter((entry) => !options.nodeIds || options.nodeIds.includes(entry.nodeId))
+      .filter((entry) => !options.types || options.types.includes(entry.unitType));
+  }
+
+  async replaceSemanticUnits(
+    documentId: string,
+    nodeId: string,
+    units: DetectedUnit[],
+    sourceRevision: number,
+  ): Promise<void> {
+    await this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      const kept = (data.semanticUnits ?? []).filter((entry) => entry.nodeId !== nodeId);
+      const added: SemanticUnitRecord[] = units.map((unit) => ({
+        id: newSemanticUnitId(),
+        documentId,
+        nodeId,
+        unitType: unit.type,
+        value: unit.value,
+        context: unit.context,
+        rule: unit.rule,
+        sourceRevision,
+        createdAt: now,
+      }));
+
+      await this.write({ ...data, semanticUnits: [...kept, ...added] });
+    });
+  }
+
+  /**
+   * Lexical retrieval.
+   *
+   * PostgreSQL has a real full-text index; here the fallback scores by how many
+   * distinct query terms a block contains, which is enough to make exact
+   * terminology beat mere similarity in the fused ranking.
+   */
+  async searchText(documentId: string, query: string, limit: number): Promise<TextHit[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    const terms = queryTerms(query);
+    if (terms.length === 0) return [];
+
+    return flattenBlocks(data.content)
+      .map((block) => {
+        const haystack = block.text.toLowerCase();
+        const matched = terms.filter((term) => haystack.includes(term));
+        const density = matched.length / terms.length;
+        return { nodeId: block.id, text: block.text, rank: density * (matched.length > 0 ? 1 : 0) };
+      })
+      .filter((hit) => hit.rank > 0)
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, limit);
+  }
+
+  async searchVector(
+    documentId: string,
+    vector: number[],
+    limit: number,
+  ): Promise<VectorHit[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    const text = new Map(flattenBlocks(data.content).map((block) => [block.id, block.text]));
+
+    return (data.embeddings ?? [])
+      .filter((entry) => entry.embeddingType === 'block' && text.has(entry.nodeId))
+      .map((entry) => ({
+        nodeId: entry.nodeId,
+        text: text.get(entry.nodeId) ?? '',
+        similarity: cosineSimilarity(vector, entry.vector),
+      }))
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+  }
+
+  async indexStatus(documentId: string): Promise<IndexStatusReport> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    const blocks = flattenBlocks(data.content);
+    const embeddings = data.embeddings ?? [];
+    const summaries = data.summaries ?? [];
+    const embedded = new Set(embeddings.map((entry) => entry.nodeId));
+
+    const expected = expectedSummaries(data.content);
+
+    return {
+      documentId,
+      revision: data.document.currentRevision,
+      blocks: blocks.length,
+      embeddings: {
+        current: embeddings.filter((entry) => entry.status === 'current').length,
+        stale: embeddings.filter((entry) => entry.status !== 'current').length,
+        missing: blocks.filter((block) => !embedded.has(block.id)).length,
+      },
+      summaries: (['document', 'chapter', 'section'] as SummaryType[]).map((type) => {
+        const forType = summaries.filter((entry) => entry.summaryType === type);
+        const present = new Set(forType.map((entry) => entry.nodeId));
+        return {
+          type,
+          current: forType.filter((entry) => entry.status === 'current').length,
+          stale: forType.filter((entry) => entry.status === 'stale').length,
+          potentiallyStale: forType.filter((entry) => entry.status === 'potentially_stale').length,
+          missing: expected[type].filter((nodeId) => !present.has(nodeId)).length,
+        };
+      }),
+      semanticUnits: (data.semanticUnits ?? []).length,
+    };
+  }
+}
+
+/** Which summaries a document ought to have, by type. */
+export function expectedSummaries(
+  content: DocumentContent,
+): Record<SummaryType, (string | null)[]> {
+  const all = regions(content);
+  return {
+    document: [null],
+    chapter: all.filter((region) => region.level === 1).map((region) => region.headingId),
+    section: all.filter((region) => region.level > 1).map((region) => region.headingId),
+  };
+}
+
+/** Words of a query, lowercased, for the lexical fallback. */
+function queryTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [])];
 }
 
 /** A proposal that has reached a terminal state cannot be resolved again. */
-function isResolved(suggestion: SuggestionRecord): boolean {
+function isResolvedSuggestion(suggestion: SuggestionRecord): boolean {
   return (
     suggestion.status === 'accepted' ||
     suggestion.status === 'rejected' ||

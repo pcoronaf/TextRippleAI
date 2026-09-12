@@ -8,6 +8,7 @@ import {
   conversationTitle,
   parseModifyResponse,
 } from '@/ai/prompts';
+import { briefsFor } from '@/server/briefs';
 import { getStore } from '@/store';
 import { handleError } from '@/server/http';
 
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
       highlight: typeof body.selectedText === 'string' ? body.selectedText : undefined,
       question: instruction,
       recentChanges: changes,
+      briefs: await briefsFor(documentId, loaded.content, blockId),
       history,
       resendSurroundings: true,
       budgetTokens: typeof body.budgetTokens === 'number' ? body.budgetTokens : undefined,

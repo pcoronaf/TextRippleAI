@@ -8,6 +8,7 @@
 import type { Pool, PoolClient } from 'pg';
 
 import { replaceBlockText } from '@/core/apply';
+import { planInvalidation } from '@/core/index-plan';
 import { classifyChange } from '@/core/classify';
 import { emptyDocument, ensureNodeIds, flattenBlocks, inferTitle } from '@/core/document';
 import { contentHash } from '@/core/hash';
@@ -16,8 +17,11 @@ import {
   newCheckpointId,
   newConversationId,
   newDocumentId,
+  newEmbeddingId,
   newMessageId,
+  newSemanticUnitId,
   newSuggestionRecordId,
+  newSummaryId,
 } from '@/core/ids';
 import type {
   ChangeClassification,
@@ -34,10 +38,19 @@ import type {
   ConversationRecord,
   MessageRecord,
   MessageRole,
+  EmbeddingRecord,
+  EmbeddingType,
+  IndexStatus,
+  IndexStatusReport,
+  SemanticUnitRecord,
   SuggestionRecord,
   SuggestionStatus,
+  SummaryRecord,
+  SummaryType,
 } from '@/core/types';
+import type { DetectedUnit } from '@/core/semantics';
 
+import { expectedSummaries } from './file-store';
 import { buildNodeRecords, toChangeRecords } from './records';
 import {
   ConversationNotFoundError,
@@ -52,11 +65,15 @@ import {
   type CreateConversationInput,
   type CreateDocumentInput,
   type CreateSuggestionInput,
+  type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
   type SaveDocumentInput,
   type SaveDocumentResult,
   type Store,
+  type SummaryUpsert,
+  type TextHit,
+  type VectorHit,
 } from './types';
 
 type Row = Record<string, any>;
@@ -358,10 +375,17 @@ export class PostgresStore implements Store {
           where document_id = $1`,
         [id],
       );
-      await this.writeNodes(
+      const previousNodes = existing.rows.map(toNode);
+      const nodes = buildNodeRecords(id, content, revision, previousNodes);
+      await this.writeNodes(client, id, nodes);
+
+      const surviving = new Set(nodes.map((node) => node.id));
+      await this.invalidateIndex(
         client,
         id,
-        buildNodeRecords(id, content, revision, existing.rows.map(toNode)),
+        content,
+        nodes.filter((node) => node.revision === revision).map((node) => node.id),
+        previousNodes.filter((node) => !surviving.has(node.id)).map((node) => node.id),
       );
 
       const changes = toChangeRecords(id, input.changes, {
@@ -831,6 +855,8 @@ export class PostgresStore implements Store {
         [documentId, suggestionId, changeId, input.acceptedBy],
       );
 
+      await this.invalidateIndex(client, documentId, content, [suggestion.blockId], []);
+
       return {
         document: toDocument(updatedDocument.rows[0]),
         content,
@@ -839,9 +865,369 @@ export class PostgresStore implements Store {
       };
     });
   }
+
+  // ---- Semantic index -----------------------------------------------------
+
+  /**
+   * Mark derived artifacts stale in the same transaction that moved the text,
+   * and drop those belonging to blocks that no longer exist.
+   */
+  private async invalidateIndex(
+    client: PoolClient,
+    documentId: string,
+    content: DocumentContent,
+    changedNodeIds: string[],
+    removedNodeIds: string[],
+  ): Promise<void> {
+    if (removedNodeIds.length > 0) {
+      await client.query(
+        'delete from embeddings where document_id = $1 and node_id = any ($2::text[])',
+        [documentId, removedNodeIds],
+      );
+      await client.query(
+        'delete from semantic_units where document_id = $1 and node_id = any ($2::text[])',
+        [documentId, removedNodeIds],
+      );
+      await client.query(
+        'delete from summaries where document_id = $1 and node_id = any ($2::text[])',
+        [documentId, removedNodeIds],
+      );
+    }
+
+    if (changedNodeIds.length === 0) return;
+    const plan = planInvalidation(content, changedNodeIds);
+
+    await client.query(
+      `update embeddings set status = 'stale', updated_at = now()
+        where document_id = $1 and node_id = any ($2::text[])`,
+      [documentId, plan.staleBlockIds],
+    );
+
+    if (plan.staleSummaryNodeIds.length > 0) {
+      await client.query(
+        `update summaries set status = 'stale', updated_at = now()
+          where document_id = $1 and node_id = any ($2::text[])`,
+        [documentId, plan.staleSummaryNodeIds],
+      );
+    }
+    if (plan.potentiallyStaleSummaryNodeIds.length > 0) {
+      await client.query(
+        `update summaries set status = 'potentially_stale', updated_at = now()
+          where document_id = $1 and node_id = any ($2::text[]) and status = 'current'`,
+        [documentId, plan.potentiallyStaleSummaryNodeIds],
+      );
+    }
+    if (plan.documentSummaryAffected) {
+      await client.query(
+        `update summaries set status = 'potentially_stale', updated_at = now()
+          where document_id = $1 and node_id is null and status = 'current'`,
+        [documentId],
+      );
+    }
+  }
+
+  async listSummaries(
+    documentId: string,
+    options: { types?: SummaryType[]; statuses?: IndexStatus[] } = {},
+  ): Promise<SummaryRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from summaries where document_id = $1';
+
+    if (options.types?.length) {
+      values.push(options.types);
+      sql += ` and summary_type = any ($${values.length}::text[])`;
+    }
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+
+    return (await this.query(sql, values)).map(toSummary);
+  }
+
+  async upsertSummary(documentId: string, input: SummaryUpsert): Promise<SummaryRecord> {
+    // The unique indexes are partial (node_id null vs not null), so `on
+    // conflict` cannot target them; update first and insert when nothing moved.
+    const updated = await this.query(
+      `update summaries
+          set content = $4, source_revision = $5, status = 'current',
+              provider = $6, model = $7, updated_at = now()
+        where document_id = $1 and summary_type = $2
+          and node_id is not distinct from $3
+        returning *`,
+      [
+        documentId,
+        input.summaryType,
+        input.nodeId,
+        input.content,
+        input.sourceRevision,
+        input.provider,
+        input.model,
+      ],
+    );
+    if (updated.length > 0) return toSummary(updated[0]);
+
+    const inserted = await this.query(
+      `insert into summaries
+           (id, document_id, node_id, summary_type, content, source_revision, status, provider, model)
+       values ($1, $2, $3, $4, $5, $6, 'current', $7, $8)
+       returning *`,
+      [
+        newSummaryId(),
+        documentId,
+        input.nodeId,
+        input.summaryType,
+        input.content,
+        input.sourceRevision,
+        input.provider,
+        input.model,
+      ],
+    );
+    return toSummary(inserted[0]);
+  }
+
+  async listEmbeddings(
+    documentId: string,
+    options: { statuses?: IndexStatus[]; nodeIds?: string[] } = {},
+  ): Promise<EmbeddingRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from embeddings where document_id = $1';
+
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+    if (options.nodeIds?.length) {
+      values.push(options.nodeIds);
+      sql += ` and node_id = any ($${values.length}::text[])`;
+    }
+
+    return (await this.query(sql, values)).map(toEmbedding);
+  }
+
+  async upsertEmbedding(documentId: string, input: EmbeddingUpsert): Promise<EmbeddingRecord> {
+    const rows = await this.query(
+      `insert into embeddings
+           (id, document_id, node_id, embedding_type, vector, content_hash, source_revision,
+            status, provider, model)
+       values ($1, $2, $3, $4, $5::vector, $6, $7, 'current', $8, $9)
+       on conflict (document_id, node_id, embedding_type) do update
+           set vector          = excluded.vector,
+               content_hash    = excluded.content_hash,
+               source_revision = excluded.source_revision,
+               status          = 'current',
+               provider        = excluded.provider,
+               model           = excluded.model,
+               updated_at      = now()
+       returning *`,
+      [
+        newEmbeddingId(),
+        documentId,
+        input.nodeId,
+        input.embeddingType,
+        toVectorLiteral(input.vector),
+        input.contentHash,
+        input.sourceRevision,
+        input.provider,
+        input.model,
+      ],
+    );
+    return toEmbedding(rows[0]);
+  }
+
+  async listSemanticUnits(
+    documentId: string,
+    options: { nodeIds?: string[]; types?: SemanticUnitRecord['unitType'][] } = {},
+  ): Promise<SemanticUnitRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from semantic_units where document_id = $1';
+
+    if (options.nodeIds?.length) {
+      values.push(options.nodeIds);
+      sql += ` and node_id = any ($${values.length}::text[])`;
+    }
+    if (options.types?.length) {
+      values.push(options.types);
+      sql += ` and unit_type = any ($${values.length}::text[])`;
+    }
+
+    return (await this.query(sql, values)).map(toSemanticUnit);
+  }
+
+  async replaceSemanticUnits(
+    documentId: string,
+    nodeId: string,
+    units: DetectedUnit[],
+    sourceRevision: number,
+  ): Promise<void> {
+    await this.transaction(async (client) => {
+      await client.query('delete from semantic_units where document_id = $1 and node_id = $2', [
+        documentId,
+        nodeId,
+      ]);
+
+      for (const unit of units) {
+        await client.query(
+          `insert into semantic_units
+               (id, document_id, node_id, unit_type, value, context, rule, source_revision)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            newSemanticUnitId(),
+            documentId,
+            nodeId,
+            unit.type,
+            unit.value,
+            unit.context,
+            unit.rule,
+            sourceRevision,
+          ],
+        );
+      }
+    });
+  }
+
+  /** Exact-terminology retrieval over the full-text index from migration 0001. */
+  async searchText(documentId: string, query: string, limit: number): Promise<TextHit[]> {
+    const rows = await this.query(
+      `select id as node_id, text,
+              ts_rank(to_tsvector('english', text), plainto_tsquery('english', $2)) as rank
+         from document_nodes
+        where document_id = $1
+          and to_tsvector('english', text) @@ plainto_tsquery('english', $2)
+        order by rank desc
+        limit $3`,
+      [documentId, query, limit],
+    );
+
+    return rows.map((row) => ({
+      nodeId: row.node_id,
+      text: row.text,
+      rank: Number(row.rank),
+    }));
+  }
+
+  /** Semantic retrieval: cosine distance over pgvector. */
+  async searchVector(documentId: string, vector: number[], limit: number): Promise<VectorHit[]> {
+    const rows = await this.query(
+      `select e.node_id, n.text, 1 - (e.vector <=> $2::vector) as similarity
+         from embeddings e
+         join document_nodes n
+           on n.document_id = e.document_id and n.id = e.node_id
+        where e.document_id = $1 and e.embedding_type = 'block'
+        order by e.vector <=> $2::vector
+        limit $3`,
+      [documentId, toVectorLiteral(vector), limit],
+    );
+
+    return rows.map((row) => ({
+      nodeId: row.node_id,
+      text: row.text,
+      similarity: Number(row.similarity),
+    }));
+  }
+
+  async indexStatus(documentId: string): Promise<IndexStatusReport> {
+    const document = await this.getDocument(documentId);
+    if (!document) throw new DocumentNotFoundError(documentId);
+
+    const blocks = flattenBlocks(document.content);
+    const [embeddings, summaries, units] = await Promise.all([
+      this.listEmbeddings(documentId),
+      this.listSummaries(documentId),
+      this.query('select count(*)::int as count from semantic_units where document_id = $1', [
+        documentId,
+      ]),
+    ]);
+
+    const embedded = new Set(embeddings.map((entry) => entry.nodeId));
+    const expected = expectedSummaries(document.content);
+
+    return {
+      documentId,
+      revision: document.document.currentRevision,
+      blocks: blocks.length,
+      embeddings: {
+        current: embeddings.filter((entry) => entry.status === 'current').length,
+        stale: embeddings.filter((entry) => entry.status !== 'current').length,
+        missing: blocks.filter((block) => !embedded.has(block.id)).length,
+      },
+      summaries: (['document', 'chapter', 'section'] as SummaryType[]).map((type) => {
+        const forType = summaries.filter((entry) => entry.summaryType === type);
+        const present = new Set(forType.map((entry) => entry.nodeId));
+        return {
+          type,
+          current: forType.filter((entry) => entry.status === 'current').length,
+          stale: forType.filter((entry) => entry.status === 'stale').length,
+          potentiallyStale: forType.filter((entry) => entry.status === 'potentially_stale').length,
+          missing: expected[type].filter((nodeId) => !present.has(nodeId)).length,
+        };
+      }),
+      semanticUnits: units[0]?.count ?? 0,
+    };
+  }
 }
 
 /** A proposal that has reached a terminal state cannot be resolved again. */
 function isResolved(status: SuggestionStatus): boolean {
   return status === 'accepted' || status === 'rejected' || status === 'revised';
+}
+
+function toSummary(row: Row): SummaryRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    nodeId: row.node_id,
+    summaryType: row.summary_type as SummaryType,
+    content: row.content,
+    sourceRevision: row.source_revision,
+    status: row.status as IndexStatus,
+    provider: row.provider,
+    model: row.model,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+/** pgvector returns its type as the string "[1,2,3]". */
+function parseVector(value: unknown): number[] {
+  if (Array.isArray(value)) return value as number[];
+  if (typeof value !== 'string') return [];
+  return value
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .filter(Boolean)
+    .map(Number);
+}
+
+const toVectorLiteral = (vector: number[]): string => `[${vector.join(',')}]`;
+
+function toEmbedding(row: Row): EmbeddingRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    nodeId: row.node_id,
+    embeddingType: row.embedding_type as EmbeddingType,
+    vector: parseVector(row.vector),
+    contentHash: row.content_hash,
+    sourceRevision: row.source_revision,
+    status: row.status as IndexStatus,
+    provider: row.provider,
+    model: row.model,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+function toSemanticUnit(row: Row): SemanticUnitRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    nodeId: row.node_id,
+    unitType: row.unit_type,
+    value: row.value,
+    context: row.context,
+    rule: row.rule,
+    sourceRevision: row.source_revision,
+    createdAt: toIso(row.created_at),
+  };
 }

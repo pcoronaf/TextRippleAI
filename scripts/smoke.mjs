@@ -500,6 +500,110 @@ async function main() {
     ledgerWithAi.changes.filter((change) => change.source === 'ai_accepted').length === 1,
   );
 
+  console.log('\nSemantic index');
+  const statusBefore = await json(`/api/documents/${id}/index`);
+  check(
+    'every block starts unindexed',
+    statusBefore.embeddings.missing === statusBefore.blocks && statusBefore.blocks > 0,
+    `${statusBefore.embeddings.missing} of ${statusBefore.blocks}`,
+  );
+  check(
+    'summaries start missing',
+    statusBefore.summaries.every((entry) => entry.current === 0),
+  );
+
+  const indexed = await json(`/api/documents/${id}/index`, { method: 'POST' });
+  check('embeddings were written', indexed.embeddingsWritten > 0, `${indexed.embeddingsWritten}`);
+  check('summaries were written', indexed.summariesWritten > 0, `${indexed.summariesWritten}`);
+  check(
+    'terms, definitions and claims were extracted',
+    indexed.semanticUnitsWritten > 0,
+    `${indexed.semanticUnitsWritten}`,
+  );
+  check('nothing is left stale', indexed.status.embeddings.stale === 0);
+  check('nothing is left unembedded', indexed.status.embeddings.missing === 0);
+
+  const reindexed = await json(`/api/documents/${id}/index`, { method: 'POST' });
+  check(
+    're-indexing a current document regenerates nothing',
+    reindexed.embeddingsWritten === 0 && reindexed.summariesWritten === 0,
+    `${reindexed.embeddingsWritten} embeddings, ${reindexed.summariesWritten} summaries`,
+  );
+
+  console.log('\nEditing invalidates only what it touched');
+  const beforeEdit = await json(`/api/documents/${id}`);
+  await json(`/api/documents/${id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: editBlock(beforeEdit.content, blockIds[4], 'A materially different paragraph now.'),
+      expectedRevision: beforeEdit.document.currentRevision,
+      changes: [draft(blockIds[4], 'unused', 'A materially different paragraph now.')],
+    }),
+  });
+
+  const afterEdit = await json(`/api/documents/${id}/index`);
+  check('the edited block went stale', afterEdit.embeddings.stale === 1, `${afterEdit.embeddings.stale}`);
+  check(
+    'untouched blocks stayed current',
+    afterEdit.embeddings.current === statusBefore.blocks - 1,
+    `${afterEdit.embeddings.current}`,
+  );
+  check(
+    'the document brief is now suspect',
+    afterEdit.summaries.find((entry) => entry.type === 'document')?.potentiallyStale === 1,
+  );
+
+  const topUp = await json(`/api/documents/${id}/index`, { method: 'POST' });
+  check('only the stale work was redone', topUp.embeddingsWritten === 1, `${topUp.embeddingsWritten}`);
+  check('the index is current again', topUp.status.embeddings.stale === 0);
+
+  console.log('\nHybrid retrieval');
+  const lexical = await json(
+    `/api/documents/${id}/search?q=${encodeURIComponent('badgers')}&mode=text`,
+  );
+  check('exact terminology is found', lexical.hits?.[0]?.nodeId === blockIds[63], lexical.hits?.[0]?.nodeId);
+
+  const hybrid = await json(
+    `/api/documents/${id}/search?q=${encodeURIComponent('badgers')}&mode=hybrid`,
+  );
+  check('hybrid search returns hits', (hybrid.hits?.length ?? 0) > 0);
+  check('hybrid search ran the semantic half', hybrid.semanticAvailable === true);
+  check(
+    'the lexical match still wins in the fused ranking',
+    hybrid.hits?.[0]?.nodeId === blockIds[63],
+    hybrid.hits?.[0]?.nodeId,
+  );
+  check(
+    'hits report which signals produced them',
+    hybrid.hits?.[0]?.signals?.lexicalRank !== undefined,
+  );
+
+  const empty = await json(`/api/documents/${id}/search?q=`);
+  check('an empty query returns nothing', (empty.hits?.length ?? 0) === 0);
+
+  console.log('\nBriefs reach the Context Builder');
+  const withBriefs = await json('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      documentId: id,
+      blockId: blockIds[1],
+      question: 'Does this sit correctly in the document?',
+    }),
+  });
+  const briefLabels = (withBriefs.context?.parts ?? []).map((part) => part.label);
+  check('the document brief is now sent', briefLabels.includes('Document brief'), briefLabels.join(', '));
+  check(
+    'the missing-summary caveat is gone',
+    !(withBriefs.context?.omitted ?? []).some((entry) => entry.includes('summaries')),
+  );
+  check(
+    'the context still stays under budget',
+    withBriefs.context.totalTokens < withBriefs.context.budgetTokens,
+    `${withBriefs.context.totalTokens}`,
+  );
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

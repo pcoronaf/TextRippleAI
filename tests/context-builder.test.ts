@@ -148,11 +148,59 @@ describe('buildAskContext', () => {
     expect(digest.omitted.join(' ')).toContain('10-token budget');
   });
 
-  it('names the context sources that do not exist yet rather than faking them', () => {
+  it('says when the index holds no current summaries rather than faking them', () => {
     const omitted = buildAskContext(base).digest.omitted.join(' ');
 
     expect(omitted).toContain('summaries');
     expect(omitted).toContain('decisions');
+  });
+
+  it('sends the hierarchical briefs when the index has them', () => {
+    const built = buildAskContext({
+      ...base,
+      briefs: {
+        document: 'The document sets out governance duties for high-risk systems.',
+        chapter: 'Chapter three distinguishes oversight from continuous supervision.',
+        section: 'This section defines human oversight.',
+      },
+    });
+
+    expect(labels(built.parts)).toContain('Document brief');
+    expect(labels(built.parts)).toContain('Section brief');
+    expect(labels(built.parts)).toContain('Chapter brief');
+    // The gap M2 declared is closed, so it should stop being reported as one.
+    expect(built.digest.omitted.join(' ')).not.toContain('summaries');
+  });
+
+  it('puts the briefs before the passage they describe', () => {
+    const built = buildAskContext({
+      ...base,
+      briefs: { document: 'A document brief.', section: 'A section brief.' },
+    });
+    const order = labels(built.parts);
+
+    expect(order.indexOf('Document brief')).toBeLessThan(order.indexOf('Selected text'));
+    expect(order.indexOf('Section brief')).toBeLessThan(order.indexOf('Selected text'));
+  });
+
+  it('does not repeat a chapter brief that is also the section brief', () => {
+    const shared = 'One and the same brief.';
+    const built = buildAskContext({ ...base, briefs: { chapter: shared, section: shared } });
+
+    expect(labels(built.parts).filter((label) => label.endsWith('brief'))).toEqual([
+      'Section brief',
+    ]);
+  });
+
+  it('drops briefs before the selection when the budget is tight', () => {
+    const built = buildAskContext({
+      ...base,
+      briefs: { document: 'word '.repeat(500) },
+      budgetTokens: 40,
+    });
+
+    expect(labels(built.parts)).toEqual(['Selected text']);
+    expect(built.digest.omitted.join(' ')).toContain('Document brief');
   });
 
   it('honours an explicit selection narrower than the block', () => {

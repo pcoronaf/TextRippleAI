@@ -7,8 +7,9 @@ import type { ChangeRecord, ChangesSinceSummary, CheckpointRecord } from '@/core
 
 import { AskPanel, type AskPanelProps } from './AskPanel';
 import { DiffView } from './DiffView';
+import { IndexPanel, type IndexPanelProps } from './IndexPanel';
 
-export type SidebarTab = 'changes' | 'checkpoints' | 'ask' | 'impact' | 'decisions';
+export type SidebarTab = 'changes' | 'checkpoints' | 'ask' | 'index' | 'impact' | 'decisions';
 
 export interface ReviewSidebarProps {
   changes: ChangeRecord[];
@@ -25,6 +26,7 @@ export interface ReviewSidebarProps {
   tab: SidebarTab;
   onTabChange: (tab: SidebarTab) => void;
   ask: AskPanelProps;
+  index: IndexPanelProps;
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -45,6 +47,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
             ['changes', 'Changes'],
             ['checkpoints', 'Checkpoints'],
             ['ask', 'Ask'],
+            ['index', 'Index'],
             ['impact', 'Impact'],
             ['decisions', 'Decisions'],
           ] as const
@@ -63,6 +66,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
       {tab === 'changes' && <ChangesPanel {...props} />}
       {tab === 'checkpoints' && <CheckpointsPanel {...props} />}
       {tab === 'ask' && <AskPanel {...props.ask} />}
+      {tab === 'index' && <IndexPanel {...props.index} />}
       {tab === 'impact' && (
         <div className="panel">
           <p className="panel-note">

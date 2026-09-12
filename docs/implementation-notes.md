@@ -274,3 +274,102 @@ which is why the smoke test can assert the ledger provenance of an accepted rewr
 - **A rewrite cannot split or merge paragraphs.** The unit is a block, so restructuring is still
   manual work.
 - **Formatting inside a fully rewritten paragraph is lost**, as described above.
+
+---
+
+# M4 — Semantic document index
+
+## Decisions
+
+### Invalidation happens in the write that caused it
+
+Marking derived artifacts stale is not a background job or a later pass; it is part of the same
+transaction that changed the text. Nothing can leave the index claiming to be current when the
+paragraph beneath it has moved on, because there is no window in which that state exists.
+
+Regeneration is the opposite: always explicit, always asked for. Invalidate cheaply, recompute
+lazily.
+
+### Three freshness states, not two
+
+`stale` means the text this describes has changed. `potentially_stale` means something below it
+changed - a chapter brief whose section moved on is probably still broadly right. The distinction
+is what stops one paragraph edit from invalidating an entire book's worth of summaries, and it is
+the spec's own rule.
+
+A block sitting directly under a chapter heading, with no subsection between, makes that chapter's
+brief definitely stale rather than merely suspect. Where the two verdicts collide, the stronger one
+wins.
+
+### Summaries are built bottom-up
+
+Sections summarise their paragraphs; chapters summarise their section briefs; the document
+summarises its chapter briefs. A chapter brief is therefore a summary of summaries, which keeps the
+cost of indexing a book proportional to its length rather than quadratic in it. Only stale levels
+are rebuilt, and rebuilding runs bottom-up within a pass so a chapter is written from sections that
+are already current.
+
+The fast tier does all of it - this is compression, not judgement.
+
+### Summaries are written for machines
+
+The prompt asks for what the text *asserts*, in the author's own terminology, not what it covers.
+"Defines high-risk systems as those listed in Annex III", never "discusses definitions". A brief
+that paraphrases the author's terms makes the index worse than useless, because the whole point of
+M5 is to notice when a term's meaning shifts.
+
+### A stale brief is never sent
+
+`briefsFor` hands the Context Builder only summaries the index calls current. A stale brief
+describes text that no longer exists; feeding one to the model produces a confidently wrong answer
+instead of a visibly incomplete one. When nothing current exists, the context digest says so.
+
+This also closes the gap M2 declared: the digest no longer lists "summaries (built in M4)" as
+withheld, because they are now sent when they exist.
+
+### Hybrid retrieval by reciprocal rank
+
+Lexical and vector search produce scores that are not comparable, so they are fused by rank rather
+than by score: `1 / (k + rank)`, summed, with small bonuses for a block that contains the query
+phrase verbatim and for one that *defines* a term in the query. RRF needs no normalisation between
+rankers, degrades gracefully when one returns nothing, and has a single constant to tune rather
+than a weight per signal.
+
+Every hit reports which signals produced it, so a surprising ranking can be read rather than
+guessed at.
+
+### Extraction is local and free
+
+Terms, definitions, claims and citations come from pattern rules, not a model. They run on every
+indexed block at no token cost, and they are deliberately recall-oriented: over-producing is fine,
+because precision is the reasoning model's job in M5. A definition is a far stronger retrieval
+signal than similarity, and it costs nothing to have.
+
+### The server layer exists to keep two rules true
+
+`src/server/` is where the store and the AI gateway meet. Neither imports the other - `src/ai`
+still cannot reach the store, and the editing path still cannot reach `src/ai`. Putting the indexer
+inside `src/ai` would have been shorter and would have quietly broken both guarantees, which
+`tests/architecture.test.ts` now checks at the `server/` boundary instead.
+
+## Deviations from the spec
+
+| Spec | Here | Why |
+|---|---|---|
+| Separate Concept / Claim / Definition / Entity / Citation entities | One `semantic_units` table with a `unit_type` | The spec also asks for "a lightweight semantic model rather than a full formal knowledge graph". Five tables with identical shapes is the graph, not the lightweight version. Splitting later is a migration, not a redesign. |
+| Embeddings for definitions, claims and decisions as semantic units | Blocks only | Block vectors carry the definitions and claims found inside them, and every retrieval path M5 needs works on blocks. Unit-level vectors are worth adding when something asks for them. |
+| `pgvector` optional | Required by migration 0004 | A conditional schema would mean two retrieval implementations in PostgreSQL, and the spec is explicit that pgvector is sufficient and a separate vector database is not needed. |
+
+## Known limitations
+
+- **No vector index.** Exact search over `vector` without ivfflat or hnsw is linear in the number of
+  blocks. Fine for a document; the index needs a fixed dimension, which means fixing the embedding
+  model first.
+- **Re-embedding is all-or-nothing per block.** A one-word fix re-embeds the paragraph. Cheap, but
+  not free.
+- **The document brief is regenerated whenever any chapter brief is**, since it is built from them.
+  For a large manuscript that is the most expensive single artifact to keep current.
+- **Extraction is English-only** and, being pattern-based, will over-produce proper nouns in
+  heavily capitalised prose.
+- **The file store's lexical search is term overlap**, not BM25, so ranking between two blocks that
+  both match every term is arbitrary. PostgreSQL ranks properly.

@@ -59,3 +59,6 @@ export const newSuggestionId = () => newId('sug');
 export const newConversationId = () => newId('conv');
 export const newMessageId = () => newId('msg');
 export const newSuggestionRecordId = () => newId('sug');
+export const newSummaryId = () => newId('sum');
+export const newEmbeddingId = () => newId('emb');
+export const newSemanticUnitId = () => newId('unit');
