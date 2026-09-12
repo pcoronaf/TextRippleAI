@@ -91,6 +91,7 @@ embedding model when a key is present, and otherwise falls back to a determinist
 | `npm run typecheck` | TypeScript, no emit |
 | `npm test` | Unit tests (Vitest) |
 | `npm run db:migrate` | Apply `db/migrations/*.sql` (requires `DATABASE_URL`) |
+| `npm run smoke` | End-to-end check against a running server |
 
 ---
 
@@ -167,6 +168,11 @@ The suite is written against the milestone acceptance criteria, not against the 
 - a stale save is rejected rather than silently overwriting;
 - changes since a checkpoint are exactly those made after it;
 - DOCX/Markdown/HTML import assigns IDs and round-trips structure.
+
+The Tiptap plugin is driven by a real editor under jsdom, so identity behaviour is tested
+where it actually runs rather than only in the equivalent server-side helper. A separate
+smoke test walks the whole workflow over HTTP against the built server - create, edit,
+record, checkpoint, scope, filter, export, delete - and CI runs it after every build.
 
 ```bash
 npm test
