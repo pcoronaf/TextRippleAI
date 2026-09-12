@@ -192,15 +192,19 @@ describe('buildAskContext', () => {
     ]);
   });
 
-  it('drops briefs before the selection when the budget is tight', () => {
+  it('drops an oversized brief before dropping the selection', () => {
     const built = buildAskContext({
       ...base,
       briefs: { document: 'word '.repeat(500) },
       budgetTokens: 40,
     });
 
-    expect(labels(built.parts)).toEqual(['Selected text']);
+    // The brief alone exceeds the budget, so it goes; smaller parts that still
+    // fit are kept, and the selection is never at risk.
+    expect(labels(built.parts)).toContain('Selected text');
+    expect(labels(built.parts)).not.toContain('Document brief');
     expect(built.digest.omitted.join(' ')).toContain('Document brief');
+    expect(built.digest.totalTokens).toBeLessThanOrEqual(40);
   });
 
   it('honours an explicit selection narrower than the block', () => {
