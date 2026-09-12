@@ -1,0 +1,286 @@
+/**
+ * Zero-install store: one JSON file per document under `DATA_DIR`.
+ *
+ * This exists so `npm run dev` works on a machine with nothing but Node. It is
+ * intended for local drafting and the test suite, not for deployment - see
+ * `postgres-store.ts` for the real target.
+ */
+
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+
+import { emptyDocument, ensureNodeIds, inferTitle } from '@/core/document';
+import { newCheckpointId, newDocumentId } from '@/core/ids';
+import { isTrivial } from '@/core/classify';
+import type {
+  ChangeRecord,
+  CheckpointRecord,
+  DocumentContent,
+  DocumentNodeRecord,
+  DocumentRecord,
+  DocumentWithContent,
+} from '@/core/types';
+
+import { buildNodeRecords, toChangeRecords } from './records';
+import {
+  DocumentNotFoundError,
+  RevisionConflictError,
+  type CreateDocumentInput,
+  type ListChangesOptions,
+  type SaveDocumentInput,
+  type SaveDocumentResult,
+  type Store,
+} from './types';
+
+interface StoredVersion {
+  revision: number;
+  content: DocumentContent;
+  createdAt: string;
+  createdBy: string;
+}
+
+interface DocumentFile {
+  document: DocumentRecord;
+  content: DocumentContent;
+  nodes: DocumentNodeRecord[];
+  changes: ChangeRecord[];
+  checkpoints: CheckpointRecord[];
+  versions: StoredVersion[];
+}
+
+/** Snapshots retained per document; checkpoint revisions are always kept. */
+const MAX_RETAINED_VERSIONS = 25;
+
+export class FileStore implements Store {
+  readonly kind = 'file' as const;
+
+  private readonly root: string;
+  /** Serialises writes per document so concurrent saves cannot interleave. */
+  private queues = new Map<string, Promise<unknown>>();
+
+  constructor(dataDir: string) {
+    this.root = path.resolve(dataDir, 'documents');
+  }
+
+  private file(id: string): string {
+    // IDs are generated internally and contain only [A-Za-z0-9_-]; reject
+    // anything else rather than let a request shape a filesystem path.
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new DocumentNotFoundError(id);
+    return path.join(this.root, `${id}.json`);
+  }
+
+  private async read(id: string): Promise<DocumentFile | null> {
+    try {
+      return JSON.parse(await fs.readFile(this.file(id), 'utf8')) as DocumentFile;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  private async write(data: DocumentFile): Promise<void> {
+    await fs.mkdir(this.root, { recursive: true });
+    const target = this.file(data.document.id);
+    const temp = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(temp, JSON.stringify(data, null, 2), 'utf8');
+    await fs.rename(temp, target);
+  }
+
+  /** Run `task` after any write already queued for this document. */
+  private enqueue<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(id) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    this.queues.set(
+      id,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  async listDocuments(): Promise<DocumentRecord[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+
+    const documents: DocumentRecord[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const data = await this.read(entry.replace(/\.json$/, ''));
+      if (data) documents.push(data.document);
+    }
+    return documents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async createDocument(input: CreateDocumentInput): Promise<DocumentWithContent> {
+    const id = newDocumentId();
+    const now = new Date().toISOString();
+    const { content } = ensureNodeIds(input.content ?? emptyDocument());
+    const title = input.title?.trim() || inferTitle(content);
+
+    const document: DocumentRecord = {
+      id,
+      workspaceId: input.workspaceId ?? 'ws_local',
+      title,
+      currentRevision: 1,
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.enqueue(id, async () => {
+      await this.write({
+        document,
+        content,
+        nodes: buildNodeRecords(id, content, 1),
+        changes: [],
+        checkpoints: [],
+        versions: [{ revision: 1, content, createdAt: now, createdBy: input.authorId }],
+      });
+    });
+
+    return { document, content };
+  }
+
+  async getDocument(id: string): Promise<DocumentWithContent | null> {
+    const data = await this.read(id);
+    return data ? { document: data.document, content: data.content } : null;
+  }
+
+  async saveDocument(id: string, input: SaveDocumentInput): Promise<SaveDocumentResult> {
+    return this.enqueue(id, async () => {
+      const data = await this.read(id);
+      if (!data) throw new DocumentNotFoundError(id);
+      if (data.document.currentRevision !== input.expectedRevision) {
+        throw new RevisionConflictError(input.expectedRevision, data.document.currentRevision);
+      }
+
+      const revision = data.document.currentRevision + 1;
+      const now = new Date().toISOString();
+      const { content } = ensureNodeIds(input.content);
+
+      const changes = toChangeRecords(id, input.changes, {
+        authorId: input.authorId,
+        source: input.source ?? 'human',
+        revision,
+      });
+
+      const document: DocumentRecord = {
+        ...data.document,
+        title: input.title?.trim() || inferTitle(content, data.document.title),
+        currentRevision: revision,
+        updatedAt: now,
+      };
+
+      const checkpointRevisions = new Set(data.checkpoints.map((cp) => cp.revision));
+      const versions = [
+        ...data.versions,
+        { revision, content, createdAt: now, createdBy: input.authorId },
+      ];
+      const retained = versions.filter(
+        (version, index) =>
+          checkpointRevisions.has(version.revision) ||
+          index >= versions.length - MAX_RETAINED_VERSIONS,
+      );
+
+      await this.write({
+        document,
+        content,
+        nodes: buildNodeRecords(id, content, revision, data.nodes),
+        changes: [...data.changes, ...changes],
+        checkpoints: data.checkpoints,
+        versions: retained,
+      });
+
+      return { document, changes };
+    });
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    await this.enqueue(id, async () => {
+      await fs.rm(this.file(id), { force: true });
+    });
+  }
+
+  async listNodes(documentId: string): Promise<DocumentNodeRecord[]> {
+    const data = await this.read(documentId);
+    return data?.nodes ?? [];
+  }
+
+  async listChanges(documentId: string, options: ListChangesOptions = {}): Promise<ChangeRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    let changes = [...data.changes].sort((a, b) => {
+      if (a.revision !== b.revision) return b.revision - a.revision;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+
+    if (options.sinceCheckpointId) {
+      const checkpoint = data.checkpoints.find((cp) => cp.id === options.sinceCheckpointId);
+      if (checkpoint) changes = changes.filter((change) => change.revision > checkpoint.revision);
+    }
+    if (options.includeTrivial === false) {
+      changes = changes.filter((change) => !isTrivial(change.classification));
+    }
+    if (options.limit) changes = changes.slice(0, options.limit);
+
+    return changes;
+  }
+
+  async createCheckpoint(
+    documentId: string,
+    input: { name: string; createdBy: string },
+  ): Promise<CheckpointRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const checkpoint: CheckpointRecord = {
+        id: newCheckpointId(),
+        documentId,
+        name: input.name.trim() || `Checkpoint at revision ${data.document.currentRevision}`,
+        revision: data.document.currentRevision,
+        createdBy: input.createdBy,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Seal every change that has accumulated since the previous checkpoint.
+      const changes = data.changes.map((change) =>
+        change.checkpointId ? change : { ...change, checkpointId: checkpoint.id },
+      );
+
+      await this.write({
+        ...data,
+        changes,
+        checkpoints: [...data.checkpoints, checkpoint],
+      });
+
+      return checkpoint;
+    });
+  }
+
+  async listCheckpoints(documentId: string): Promise<CheckpointRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+    return [...data.checkpoints].sort((a, b) => b.revision - a.revision);
+  }
+
+  async listVersions(
+    documentId: string,
+  ): Promise<{ revision: number; createdAt: string; createdBy: string }[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+    return data.versions
+      .map(({ revision, createdAt, createdBy }) => ({ revision, createdAt, createdBy }))
+      .sort((a, b) => b.revision - a.revision);
+  }
+
+  async getVersion(documentId: string, revision: number): Promise<DocumentContent | null> {
+    const data = await this.read(documentId);
+    return data?.versions.find((version) => version.revision === revision)?.content ?? null;
+  }
+}

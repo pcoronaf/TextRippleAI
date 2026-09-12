@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No lockfile is committed yet, so `npm install` rather than `npm ci`.
+      - run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  migrations:
+    name: PostgreSQL schema
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: textripple
+          POSTGRES_PASSWORD: textripple
+          POSTGRES_DB: textripple
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U textripple"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgres://textripple:textripple@localhost:5432/textripple
+        run: npm run db:migrate
+
+      - name: Re-apply migrations (must be idempotent)
+        env:
+          DATABASE_URL: postgres://textripple:textripple@localhost:5432/textripple
+        run: npm run db:migrate
