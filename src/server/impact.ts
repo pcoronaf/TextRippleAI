@@ -59,9 +59,30 @@ export class NothingToAnalyseError extends Error {
   }
 }
 
-const DEFAULT_CANDIDATE_LIMIT = 30;
+/**
+ * How many passages reach the model.
+ *
+ * Proportional, with a ceiling and a floor. A fixed cap makes the spec's
+ * reduction target an accident of document length: 30 passages rules out 97% of
+ * a book and only half of a short paper, and on a short paper "retrieval" that
+ * forwards half the document is not retrieval at all.
+ *
+ * The ceiling keeps a long document's reasoning call affordable; the floor
+ * keeps a very short one from being cut to nothing.
+ */
+const CANDIDATE_SHARE = 0.15;
+const MAX_CANDIDATES = 30;
+const MIN_CANDIDATES = 8;
+
 /** Depth drawn from each retrieval arm before ranking. */
 const ARM_DEPTH = 40;
+
+export function candidateLimitFor(blockCount: number): number {
+  return Math.max(
+    MIN_CANDIDATES,
+    Math.min(MAX_CANDIDATES, Math.ceil(blockCount * CANDIDATE_SHARE)),
+  );
+}
 
 /**
  * Weights for the spec's candidate score.
@@ -291,10 +312,10 @@ export async function analyseImpact(
   const clusters = clusterChanges(considered, { includeTrivial: options.includeTrivial });
 
   // --- retrieve and rank ----------------------------------------------------
-  const limit = options.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT;
+  const blocksInDocument = flattenBlocks(content).length;
+  const limit = options.candidateLimit ?? candidateLimitFor(blocksInDocument);
   const candidates = await retrieveCandidates(documentId, content, clusters, limit);
 
-  const blocksInDocument = flattenBlocks(content).length;
   const retrieval = {
     blocksInDocument,
     candidatesConsidered: candidates.length,

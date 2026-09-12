@@ -463,6 +463,10 @@ should stop the next analysis proposing it again.
   UI decision that should be made after seeing real false-positive rates, not guessed at now.
 - **Re-analysing re-examines resolved findings.** A dismissed finding does not yet suppress the same
   finding next time; that is what M7's decision memory is for.
-- **The candidate list is capped at 30 passages.** On a book with a pervasive term, the cap is doing
-  real work and the tail is invisible. The ranking is what decides which 30, so its weights matter
-  more than they look.
+- **The candidate list is capped.** It is 15% of the document's blocks, floored at 8 and ceilinged
+  at 30, so the reduction target holds at any length. On a book with a pervasive term the ceiling is
+  doing real work and the tail is invisible; the ranking decides which 30 survive, so its weights
+  matter more than they look.
+- **The semantic arm has no similarity floor.** It contributes its top 40 neighbours regardless of
+  how weak the match is, and on a short document that is most of what fills the candidate pool
+  before ranking. A threshold needs tuning against a real embedding model rather than guessing.

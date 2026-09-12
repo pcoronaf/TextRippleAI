@@ -166,3 +166,26 @@ describe('clusterChanges', () => {
     expect(clusters[0].afterText).toEqual(['the likelihood of an incident']);
   });
 });
+
+describe('candidateLimitFor', () => {
+  it('keeps the reduction target achievable at any document size', async () => {
+    const { candidateLimitFor } = await import('@/server/impact');
+
+    // A fixed cap would make the spec's >80% reduction an accident of length.
+    for (const blocks of [60, 100, 500, 2000]) {
+      const limit = candidateLimitFor(blocks);
+      const reduction = (1 - limit / blocks) * 100;
+      expect(reduction, `${blocks} blocks`).toBeGreaterThan(80);
+    }
+  });
+
+  it('caps the reasoning call on a long document', async () => {
+    const { candidateLimitFor } = await import('@/server/impact');
+    expect(candidateLimitFor(100_000)).toBe(30);
+  });
+
+  it('does not cut a very short document to nothing', async () => {
+    const { candidateLimitFor } = await import('@/server/impact');
+    expect(candidateLimitFor(6)).toBe(8);
+  });
+});
