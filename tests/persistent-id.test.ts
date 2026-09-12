@@ -21,11 +21,11 @@ afterEach(() => {
   editor = null;
 });
 
-function makeEditor(content: unknown): Editor {
+function makeEditor(content: Record<string, unknown>): Editor {
   editor = new Editor({
     element: document.createElement('div'),
     extensions: [StarterKit, PersistentId],
-    content,
+    content: content as never,
   });
   return editor;
 }
@@ -108,7 +108,7 @@ describe('PersistentId extension', () => {
     instance.commands.setContent({
       type: 'doc',
       content: [paragraph('One', 'p_alpha'), paragraph('Pasted copy', 'p_alpha')],
-    });
+    } as never);
 
     const ids = idsOf(instance);
     expect(ids[0]).toBe('p_alpha');
