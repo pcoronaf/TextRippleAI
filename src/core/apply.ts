@@ -91,6 +91,35 @@ function marksAt(nodes: ContentNode[], offset: number): Mark[] | undefined {
   return last ? clone(last) : undefined;
 }
 
+const sameMarks = (a: ContentNode, b: ContentNode): boolean =>
+  JSON.stringify(a.marks ?? []) === JSON.stringify(b.marks ?? []);
+
+/**
+ * Join neighbouring text nodes that carry the same marks.
+ *
+ * Splicing naturally leaves the untouched suffix as its own node; without this
+ * every rewrite would fragment the paragraph a little further.
+ */
+function coalesce(nodes: ContentNode[]): ContentNode[] {
+  const out: ContentNode[] = [];
+
+  for (const node of nodes) {
+    const previous = out[out.length - 1];
+    if (
+      previous &&
+      typeof previous.text === 'string' &&
+      typeof node.text === 'string' &&
+      sameMarks(previous, node)
+    ) {
+      previous.text += node.text;
+      continue;
+    }
+    out.push(node);
+  }
+
+  return out;
+}
+
 /**
  * Rebuild a block's inline content so its text reads as `nextText`, keeping the
  * formatting of the untouched prefix and suffix.
@@ -116,7 +145,7 @@ export function spliceInlineText(
     body.push({ type: 'text', text: middle, ...(marks?.length ? { marks } : {}) });
   }
 
-  return [...head, ...body, ...tail];
+  return coalesce([...head, ...body, ...tail]);
 }
 
 /**

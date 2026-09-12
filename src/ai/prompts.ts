@@ -105,7 +105,10 @@ export class UnusableProposalError extends Error {
 }
 
 function section(text: string, tag: string): string | null {
-  const match = new RegExp(`<${tag}>([\s\S]*?)</${tag}>`, 'i').exec(text);
+  // Dot-all rather than a [\s\S] class: inside a template literal the
+  // backslashes in that class are consumed as string escapes, which silently
+  // turns it into [sS] and matches nothing.
+  const match = new RegExp(`<${tag}>(.*?)</${tag}>`, 'is').exec(text);
   return match ? match[1].trim() : null;
 }
 
