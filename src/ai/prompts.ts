@@ -1,4 +1,4 @@
-/** Prompt construction for selection-anchored conversation. */
+/** Prompt construction for selection-anchored conversation and modification. */
 
 import type { ContextPart, MessageRecord } from '@/core/types';
 
@@ -62,4 +62,80 @@ export function buildAskMessages(input: {
 export function conversationTitle(question: string): string {
   const cleaned = question.trim().replace(/\s+/g, ' ');
   return cleaned.length <= 60 ? cleaned : `${cleaned.slice(0, 57)}...`;
+}
+
+// --------------------------------------------------------------------------
+// Modification (M3)
+// --------------------------------------------------------------------------
+
+/**
+ * The reply format is a contract, not a preference: the replacement text is
+ * applied to the document verbatim once the author accepts it, so it must be
+ * separable from any commentary with certainty.
+ */
+export const MODIFY_SYSTEM = `You are assisting the author of a long-form document - a book, thesis, standard, specification, policy or report. The author has asked you to rewrite one passage.
+
+You have been given a small, deliberately incomplete slice of the document: the passage itself, its immediate neighbours, and where it sits in the structure. You do not have the rest of the document.
+
+What to produce:
+- A complete replacement for the passage, not a fragment and not a diff. It must read correctly in place of the original, joining cleanly to the paragraphs around it.
+- Change only what the instruction asks for. Preserve the author's terminology, register, level of hedging and citation style everywhere else. An unrequested improvement is an error.
+- Keep every factual claim, number, citation and reference that the original makes, unless the instruction is to change it. Never introduce a source, standard or figure that is not already there.
+- Plain prose only: no markdown, no bullet characters, no quotation marks wrapped around the whole passage, no commentary.
+
+Reply in exactly this form, with nothing before or after:
+
+<replacement>
+The complete replacement text for the passage.
+</replacement>
+<rationale>
+One or two sentences saying what you changed and why.
+</rationale>`;
+
+export interface ModifyProposal {
+  proposed: string;
+  rationale: string;
+}
+
+export class UnusableProposalError extends Error {
+  constructor(readonly raw: string) {
+    super('The model did not return a usable replacement');
+    this.name = 'UnusableProposalError';
+  }
+}
+
+function section(text: string, tag: string): string | null {
+  const match = new RegExp(`<${tag}>([\s\S]*?)</${tag}>`, 'i').exec(text);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Pull the replacement and rationale out of a reply.
+ *
+ * A reply with no tags at all is treated as the replacement, which is how a
+ * model that ignores the format still produces something the author can review
+ * and reject. A reply with no usable text is an error rather than an empty
+ * proposal - silently proposing to delete a paragraph would be the worst
+ * possible failure mode.
+ */
+export function parseModifyResponse(raw: string): ModifyProposal {
+  const tagged = section(raw, 'replacement');
+  const rationale = section(raw, 'rationale') ?? '';
+
+  const proposed = (tagged ?? raw.replace(/<\/?rationale>[\s\S]*/i, '')).trim();
+  if (!proposed) throw new UnusableProposalError(raw);
+
+  return { proposed, rationale };
+}
+
+export function buildModifyMessages(input: {
+  parts: ContextPart[];
+  instruction: string;
+}): CompletionMessage[] {
+  return [
+    {
+      role: 'user',
+      content: `${renderContextParts(input.parts)}\n\n## Instruction\n${input.instruction}`,
+    },
+  ];
 }

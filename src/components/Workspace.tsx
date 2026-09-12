@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildOutline } from '@/core/document';
 import { useDocumentSession } from '@/editor/use-document-session';
@@ -14,6 +14,8 @@ import type {
 } from '@/core/types';
 
 import { EditorPane, type EditorSelection } from './EditorPane';
+import type { Editor } from '@tiptap/react';
+import type { AskAction } from './AskPanel';
 import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
 
 /** Counted in the browser so the author can see the cost of what they asked for. */
@@ -39,8 +41,9 @@ export function Workspace({
 
   const [tab, setTab] = useState<SidebarTab>('changes');
   const [selection, setSelection] = useState<EditorSelection | null>(null);
-  const [trigger, setTrigger] = useState<{ action: 'ask' | 'explain'; nonce: number } | null>(null);
+  const [trigger, setTrigger] = useState<{ action: AskAction; nonce: number } | null>(null);
   const [usage, setUsage] = useState<SessionUsage>({ calls: 0, inputTokens: 0, outputTokens: 0 });
+  const editorRef = useRef<Editor | null>(null);
 
   const refresh = useCallback(async () => {
     const query = new URLSearchParams();
@@ -57,7 +60,7 @@ export function Workspace({
     setCheckpoints(boundaries.checkpoints ?? []);
   }, [hideTrivial, record.id, scope]);
 
-  const { state, handleUpdate, flushAndSave, createCheckpoint } = useDocumentSession({
+  const { state, handleUpdate, flushAndSave, createCheckpoint, rebase } = useDocumentSession({
     documentId: record.id,
     initialContent,
     initialRevision: record.currentRevision,
@@ -76,10 +79,28 @@ export function Workspace({
     [handleUpdate],
   );
 
-  const onAskAction = useCallback((action: 'ask' | 'explain') => {
+  const onAskAction = useCallback((action: AskAction) => {
     setTab('ask');
     setTrigger({ action, nonce: Date.now() });
   }, []);
+
+  /**
+   * Adopt a proposal the server has applied.
+   *
+   * The editor content is replaced without emitting an update, and the session
+   * is rebased onto the new revision - the ledger entry for this edit was
+   * written server-side, so the aggregator must not record it a second time as
+   * if the author had typed it.
+   */
+  const onAccepted = useCallback(
+    (next: DocumentContent, nextRevision: number) => {
+      editorRef.current?.commands.setContent(next, false);
+      setContent(next);
+      rebase(next, nextRevision);
+      void refresh();
+    },
+    [rebase, refresh],
+  );
 
   const onUsage = useCallback((turn: TokenUsage) => {
     setUsage((previous) => ({
@@ -148,6 +169,9 @@ export function Workspace({
             onBlur={() => void flushAndSave()}
             onSelectionChange={setSelection}
             onAskAction={onAskAction}
+            onEditorReady={(instance) => {
+              editorRef.current = instance;
+            }}
           />
         </main>
 
@@ -170,9 +194,12 @@ export function Workspace({
             busy={state.saving}
             ask={{
               documentId: record.id,
+              revision: state.revision,
               selection,
               trigger,
               onUsage,
+              onBeforeAccept: flushAndSave,
+              onAccepted,
             }}
           />
         </aside>

@@ -2,17 +2,32 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { ContextDigest, ConversationRecord, MessageRecord } from '@/core/types';
+import type {
+  ContextDigest,
+  ConversationRecord,
+  DocumentContent,
+  MessageRecord,
+  SuggestionRecord,
+} from '@/core/types';
 import type { TokenUsage } from '@/ai/types';
 
 import type { EditorSelection } from './EditorPane';
+import { SuggestionCard } from './SuggestionCard';
+
+export type AskAction = 'ask' | 'explain' | 'modify';
 
 export interface AskPanelProps {
   documentId: string;
+  /** The revision the author is reviewing against. */
+  revision: number;
   selection: EditorSelection | null;
   /** Incremented by the floating toolbar to trigger an action. */
-  trigger: { action: 'ask' | 'explain'; nonce: number } | null;
+  trigger: { action: AskAction; nonce: number } | null;
   onUsage: (usage: TokenUsage) => void;
+  /** Flush pending edits before a proposal is applied. Returns false if it failed. */
+  onBeforeAccept: () => Promise<boolean>;
+  /** A proposal was applied on the server; adopt the result. */
+  onAccepted: (content: DocumentContent, revision: number) => void;
 }
 
 interface AskResponse {
@@ -22,19 +37,42 @@ interface AskResponse {
   error?: string;
 }
 
-export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelProps) {
+export function AskPanel({
+  documentId,
+  revision,
+  selection,
+  trigger,
+  onUsage,
+  onBeforeAccept,
+  onAccepted,
+}: AskPanelProps) {
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [messages, setMessages] = useState<MessageRecord[]>([]);
+  const [suggestions, setSuggestions] = useState<SuggestionRecord[]>([]);
   const [question, setQuestion] = useState('');
+  const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const blockId = selection?.blockId ?? null;
   const lastTrigger = useRef(0);
+  const instructionInput = useRef<HTMLTextAreaElement>(null);
+
+  const loadSuggestions = useCallback(
+    async (block: string) => {
+      const response = await fetch(
+        `/api/documents/${documentId}/suggestions?blockId=${encodeURIComponent(block)}`,
+      );
+      if (!response.ok) return;
+      const body = await response.json();
+      setSuggestions(body.suggestions ?? []);
+    },
+    [documentId],
+  );
 
   /**
    * Re-selecting a paragraph resumes the conversation already anchored to it,
-   * rather than starting a fresh one each time.
+   * and shows the proposals already made about it.
    */
   useEffect(() => {
     let cancelled = false;
@@ -44,8 +82,11 @@ export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelPr
       if (!blockId) {
         setConversation(null);
         setMessages([]);
+        setSuggestions([]);
         return;
       }
+
+      await loadSuggestions(blockId);
 
       const response = await fetch(
         `/api/documents/${documentId}/conversations?anchor=${encodeURIComponent(blockId)}`,
@@ -73,9 +114,9 @@ export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelPr
     return () => {
       cancelled = true;
     };
-  }, [blockId, documentId]);
+  }, [blockId, documentId, loadSuggestions]);
 
-  const send = useCallback(
+  const ask = useCallback(
     async (action: 'ask' | 'explain', text: string) => {
       if (!blockId || busy) return;
       if (action === 'ask' && !text.trim()) return;
@@ -118,23 +159,111 @@ export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelPr
     [blockId, busy, conversation?.id, documentId, onUsage, selection],
   );
 
-  // The floating toolbar raises actions; run them once per click.
+  const modify = useCallback(
+    async (text: string, parentSuggestionId?: string) => {
+      if (!blockId || busy || !text.trim()) return;
+
+      setBusy(true);
+      setError(null);
+
+      try {
+        const response = await fetch('/api/ai/modify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            documentId,
+            blockId,
+            instruction: text,
+            selectedText: selection?.text || undefined,
+            selection: selection ? { from: selection.from, to: selection.to } : undefined,
+            conversationId: conversation?.id,
+            parentSuggestionId,
+          }),
+        });
+
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
+
+        setInstruction('');
+        onUsage(body.usage ?? { inputTokens: 0, outputTokens: 0 });
+        await loadSuggestions(blockId);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Request failed');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [blockId, busy, conversation?.id, documentId, loadSuggestions, onUsage, selection],
+  );
+
+  const resolve = useCallback(
+    async (suggestion: SuggestionRecord, action: 'accept' | 'reject' | 'discuss') => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+
+      try {
+        // Everything pending must reach the ledger before the server applies a
+        // proposal on top of it, or the two would disagree about the revision.
+        if (action === 'accept') {
+          const flushed = await onBeforeAccept();
+          if (!flushed) throw new Error('Save your pending edits before accepting');
+        }
+
+        const response = await fetch(
+          `/api/documents/${documentId}/suggestions/${suggestion.id}/resolve`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              action,
+              ...(action === 'accept' ? { expectedRevision: revision } : {}),
+            }),
+          },
+        );
+
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
+
+        if (action === 'accept') onAccepted(body.content, body.document.currentRevision);
+        if (blockId) await loadSuggestions(blockId);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Request failed');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [blockId, busy, documentId, loadSuggestions, onAccepted, onBeforeAccept, revision],
+  );
+
+  // The floating toolbar raises actions; run each click once.
   useEffect(() => {
     if (!trigger || trigger.nonce === lastTrigger.current) return;
     lastTrigger.current = trigger.nonce;
-    if (trigger.action === 'explain') void send('explain', '');
-  }, [send, trigger]);
+
+    if (trigger.action === 'explain') void ask('explain', '');
+    // A rewrite needs an instruction, so put the cursor where it is typed
+    // rather than guessing what the author wants changed.
+    if (trigger.action === 'modify') instructionInput.current?.focus();
+  }, [ask, trigger]);
 
   if (!blockId) {
     return (
       <div className="panel">
         <p className="panel-note">
-          Select a passage in the document, then ask about it. Nothing is sent to a model until you
-          do - ordinary editing makes no request at all.
+          Select a passage in the document, then ask about it or ask for a rewrite. Nothing is sent
+          to a model until you do - ordinary editing makes no request at all.
         </p>
       </div>
     );
   }
+
+  const open = suggestions.filter(
+    (suggestion) => suggestion.status === 'generated' || suggestion.status === 'discussed',
+  );
+  const resolved = suggestions.filter(
+    (suggestion) => suggestion.status !== 'generated' && suggestion.status !== 'discussed',
+  );
 
   return (
     <div className="panel">
@@ -146,11 +275,37 @@ export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelPr
         <span className="block-id">{blockId}</span>
       </div>
 
-      {messages.length === 0 && !busy && (
-        <p className="panel-note" style={{ marginTop: 12 }}>
-          No conversation about this passage yet.
-        </p>
-      )}
+      {open.map((suggestion) => (
+        <SuggestionCard
+          key={suggestion.id}
+          suggestion={suggestion}
+          busy={busy}
+          onAccept={() => void resolve(suggestion, 'accept')}
+          onReject={() => void resolve(suggestion, 'reject')}
+          onDiscuss={() => void resolve(suggestion, 'discuss')}
+          onRevise={(text) => void modify(text, suggestion.id)}
+        />
+      ))}
+
+      <div className="ask-composer" style={{ marginTop: 14 }}>
+        <textarea
+          ref={instructionInput}
+          rows={2}
+          value={instruction}
+          placeholder="Rewrite this so that..."
+          disabled={busy}
+          onChange={(event) => setInstruction(event.target.value)}
+        />
+        <div className="field-row" style={{ marginBottom: 0 }}>
+          <button
+            className="primary"
+            disabled={busy || !instruction.trim()}
+            onClick={() => void modify(instruction)}
+          >
+            Propose a rewrite
+          </button>
+        </div>
+      </div>
 
       <div className="thread">
         {messages.map((message) => (
@@ -175,19 +330,40 @@ export function AskPanel({ documentId, selection, trigger, onUsage }: AskPanelPr
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
-              void send('ask', question);
+              void ask('ask', question);
             }
           }}
         />
         <div className="field-row" style={{ marginBottom: 0 }}>
-          <button className="primary" disabled={busy || !question.trim()} onClick={() => void send('ask', question)}>
+          <button
+            className="primary"
+            disabled={busy || !question.trim()}
+            onClick={() => void ask('ask', question)}
+          >
             Ask
           </button>
-          <button disabled={busy} onClick={() => void send('explain', '')}>
+          <button disabled={busy} onClick={() => void ask('explain', '')}>
             Explain
           </button>
         </div>
       </div>
+
+      {resolved.length > 0 && (
+        <details className="resolved-suggestions">
+          <summary>{resolved.length} resolved proposal(s)</summary>
+          {resolved.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              busy={busy}
+              onAccept={() => undefined}
+              onReject={() => undefined}
+              onDiscuss={() => undefined}
+              onRevise={() => undefined}
+            />
+          ))}
+        </details>
+      )}
     </div>
   );
 }

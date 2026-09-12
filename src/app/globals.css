@@ -562,3 +562,65 @@ input[type='search'] {
   margin: 4px 0 0;
   padding-left: 18px;
 }
+
+/* ------------------------------------------------------------ suggestions */
+
+.suggestion {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 11px 12px;
+  margin-bottom: 12px;
+  background: var(--surface);
+}
+
+.suggestion-accepted,
+.suggestion-rejected,
+.suggestion-revised {
+  border-color: var(--border);
+  opacity: 0.75;
+}
+
+.suggestion-instruction {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.suggestion-rationale {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  border-left: 2px solid var(--border);
+  padding-left: 9px;
+}
+
+.suggestion-resolved {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.suggestion textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+.resolved-suggestions {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.resolved-suggestions summary {
+  cursor: pointer;
+  margin-bottom: 10px;
+}

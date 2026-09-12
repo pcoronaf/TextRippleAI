@@ -191,3 +191,86 @@ the regression at the moment someone introduces it, rather than on an invoice.
   visible wait; streaming is a UI change, not an architectural one, and can land any time.
 - **Token estimates are four-characters-per-token.** Good enough to hold a budget, wrong by a few
   per cent per language. The provider's real count is recorded alongside it.
+
+---
+
+# M3 — AI editing
+
+## Decisions
+
+### The server applies the proposal, not the client
+
+Accepting a suggestion posts to the server, which loads the document, applies the replacement,
+bumps the revision, writes the ledger entry and marks the proposal accepted - in one operation. The
+client then adopts the result.
+
+The alternative, letting the client edit the text and then report what it did, would make every
+guarantee in this milestone advisory. Provenance that the client can author is not provenance.
+
+### Acceptance is guarded twice
+
+A proposal carries the block's text as it stood when the proposal was made. Acceptance checks both
+that the document is still at the revision the author was reviewing (`RevisionConflictError`) and
+that *this passage* still reads as it did (`SuggestionStaleError`). The second check is the
+important one: revisions advance for edits anywhere in the document, but only the passage itself
+determines whether the rewrite still makes sense. Applying a stale proposal would silently discard
+whatever the author wrote in the meantime.
+
+### Block granularity, with formatting preserved at the edges
+
+A proposal replaces a whole block. That is the smallest unit whose meaning stands on its own and
+the largest a reviewer takes in at a glance, and it keeps application unambiguous.
+
+`spliceInlineText` keeps the marks on whatever prefix and suffix the rewrite leaves untouched, so
+tightening the opening clause of a paragraph does not strip the hyperlink at the end of it. Only
+the span that actually changed becomes plain text. A total rewrite legitimately loses inline
+formatting, because there is nothing left to anchor it to.
+
+### A rewritten paragraph is the same paragraph
+
+The block keeps its ID and its node attributes through acceptance. That is what makes the edit
+traceable afterwards, and what will let M5 ask "what else depends on this paragraph" without
+needing to know it was once rewritten.
+
+### The aggregator is told, not left to notice
+
+After acceptance the editor content is replaced without emitting an update, and the session is
+rebased onto the new revision (`ChangeAggregator.reset`). Otherwise the aggregator would see the
+new text as a manual edit and write a second, human-attributed ledger entry for a change that was
+already recorded as AI-accepted. Pending edits are flushed before acceptance so nothing is lost.
+
+### The reply format is a contract
+
+The model must return `<replacement>` and `<rationale>` sections. The replacement is applied
+verbatim once accepted, so it has to be separable from commentary with certainty rather than by
+guesswork. An untagged reply is treated as the replacement - a model that ignores the format still
+produces something reviewable - but an empty one is an error. Silently proposing to delete a
+paragraph is the worst available failure mode.
+
+### Revision supersedes rather than overwrites
+
+Asking for another attempt creates a new proposal pointing at its parent, and marks the parent
+`revised`. Nothing is edited in place, so the sequence of attempts stays legible afterwards - which
+matters when the question later becomes "why does this paragraph read the way it does".
+
+### The mock provider honours the contract
+
+When the system prompt asks for a tagged replacement, the deterministic stub returns one. That
+keeps the entire propose → review → accept path exercisable in CI with no API key and no spend,
+which is why the smoke test can assert the ledger provenance of an accepted rewrite.
+
+## Deviations from the spec
+
+| Spec | Here | Why |
+|---|---|---|
+| Suggestion has `selection_start` / `selection_end` and replaces a selection | Recorded for provenance; the replacement covers the whole block | Splicing a model's plain-text output into the middle of a formatted inline range has no unambiguous reading. A narrower highlight is passed to the model as the place to concentrate. |
+| `DISCUSSED` is a distinct path to `REVISED` | Both are available from `generated`; discussing is not required before revising | The author should not have to perform a step to get a second attempt. |
+
+## Known limitations
+
+- **No streaming.** A reasoning-tier rewrite of a long paragraph is a visible wait.
+- **One proposal is applied at a time.** Accepting several in a batch would need a single revision
+  covering all of them; each acceptance currently makes its own.
+- **A rewrite cannot split or merge paragraphs.** The unit is a block, so restructuring is still
+  manual work.
+- **Formatting inside a fully rewritten paragraph is lost**, as described above.

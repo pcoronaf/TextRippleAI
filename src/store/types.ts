@@ -20,6 +20,8 @@ import type {
   DraftChange,
   MessageRecord,
   MessageRole,
+  SuggestionRecord,
+  SuggestionStatus,
 } from '@/core/types';
 
 export interface CreateDocumentInput {
@@ -111,6 +113,101 @@ export interface Store {
     input: AppendMessageInput,
   ): Promise<MessageRecord>;
   listMessages(documentId: string, conversationId: string): Promise<MessageRecord[]>;
+
+  // ---- Suggestions (M3) ---------------------------------------------------
+
+  createSuggestion(documentId: string, input: CreateSuggestionInput): Promise<SuggestionRecord>;
+  getSuggestion(documentId: string, suggestionId: string): Promise<SuggestionRecord | null>;
+  listSuggestions(documentId: string, options?: ListSuggestionsOptions): Promise<SuggestionRecord[]>;
+
+  /**
+   * Resolve a proposal without touching the document: rejected, or marked as
+   * discussed or superseded.
+   */
+  setSuggestionStatus(
+    documentId: string,
+    suggestionId: string,
+    input: { status: Exclude<SuggestionStatus, 'accepted'>; resolvedBy?: string },
+  ): Promise<SuggestionRecord>;
+
+  /**
+   * Accept a proposal: apply it to the document, bump the revision, and write
+   * the ledger entry that records where the text came from - in one operation,
+   * so the document can never disagree with its own provenance.
+   */
+  acceptSuggestion(
+    documentId: string,
+    suggestionId: string,
+    input: AcceptSuggestionInput,
+  ): Promise<AcceptSuggestionResult>;
+}
+
+export interface CreateSuggestionInput {
+  blockId: string;
+  conversationId: string | null;
+  instruction: string;
+  before: string;
+  proposed: string;
+  rationale: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  provider: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  contextDigest: ContextDigest | null;
+  parentSuggestionId: string | null;
+  baseRevision: number;
+}
+
+export interface ListSuggestionsOptions {
+  blockId?: string;
+  /** Defaults to every status. */
+  statuses?: SuggestionStatus[];
+}
+
+export interface AcceptSuggestionInput {
+  acceptedBy: string;
+  /** The revision the author was reviewing against. */
+  expectedRevision: number;
+}
+
+export interface AcceptSuggestionResult {
+  document: DocumentRecord;
+  content: DocumentContent;
+  change: ChangeRecord;
+  suggestion: SuggestionRecord;
+}
+
+export class SuggestionNotFoundError extends Error {
+  constructor(readonly suggestionId: string) {
+    super(`Suggestion ${suggestionId} not found`);
+    this.name = 'SuggestionNotFoundError';
+  }
+}
+
+/** Raised when a proposal is resolved twice. */
+export class SuggestionResolvedError extends Error {
+  constructor(
+    readonly suggestionId: string,
+    readonly status: SuggestionStatus,
+  ) {
+    super(`Suggestion ${suggestionId} was already ${status}`);
+    this.name = 'SuggestionResolvedError';
+  }
+}
+
+/**
+ * Raised when the passage has changed since the proposal was made. Applying it
+ * anyway would silently discard whatever the author wrote in between.
+ */
+export class SuggestionStaleError extends Error {
+  constructor(readonly suggestionId: string) {
+    super(
+      `The passage has changed since suggestion ${suggestionId} was proposed. Ask for a fresh rewrite.`,
+    );
+    this.name = 'SuggestionStaleError';
+  }
 }
 
 export interface CreateConversationInput {

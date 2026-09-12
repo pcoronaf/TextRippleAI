@@ -58,3 +58,4 @@ export const newSessionId = () => newId('sess');
 export const newSuggestionId = () => newId('sug');
 export const newConversationId = () => newId('conv');
 export const newMessageId = () => newId('msg');
+export const newSuggestionRecordId = () => newId('sug');

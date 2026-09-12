@@ -34,12 +34,35 @@ export class MockProvider implements AiProvider {
 
   async complete(request: CompletionRequest): Promise<CompletionResult> {
     const last = request.messages[request.messages.length - 1]?.content ?? '';
+
+    // When the caller's contract asks for a tagged replacement, answer in that
+    // shape. It keeps the whole propose/review/accept path exercisable without
+    // an API key, which is the point of having a stub at all.
+    const text = request.system?.includes('<replacement>')
+      ? this.proposal(last)
+      : `[mock ${request.tier ?? 'fast'}] ${last.slice(0, 280)}`;
+
     return {
-      text: `[mock ${request.tier ?? 'fast'}] ${last.slice(0, 280)}`,
+      text,
       provider: this.name,
       model: this.models[request.tier ?? 'fast'],
       usage: { inputTokens: 0, outputTokens: 0 },
     };
+  }
+
+  /** Echo the passage back with a visible marker, in the documented format. */
+  private proposal(message: string): string {
+    const selected = /## Selected text\n([\s\S]*?)(?:\n\n## |$)/.exec(message);
+    const passage = (selected?.[1] ?? 'The passage.').trim();
+
+    return [
+      '<replacement>',
+      `${passage} (revised by the mock provider)`,
+      '</replacement>',
+      '<rationale>',
+      'Deterministic stub: the passage is echoed back with a marker so the review workflow can be exercised.',
+      '</rationale>',
+    ].join('\n');
   }
 
   async embed(texts: string[]): Promise<EmbeddingResult> {

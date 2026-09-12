@@ -210,11 +210,37 @@ export function useDocumentSession({
     [documentId, onSaved, save],
   );
 
+  /**
+   * Adopt a document state produced on the server - the result of accepting an
+   * AI proposal. The ledger entry for it was written there, so the aggregator
+   * takes the new text as its baseline rather than recording it again.
+   */
+  const rebase = useCallback(
+    (next: DocumentContent, nextRevision: number) => {
+      content.current = next;
+      revision.current = nextRevision;
+      dirty.current = false;
+      queued.current = [];
+      lastEditAt.current = 0;
+      aggregator.reset(flattenBlocks(next));
+
+      setState((previous) => ({
+        ...previous,
+        revision: nextRevision,
+        pendingCount: 0,
+        lastSavedAt: new Date().toISOString(),
+        error: null,
+      }));
+    },
+    [aggregator],
+  );
+
   return {
     state,
     handleUpdate,
     save,
     createCheckpoint,
+    rebase,
     flushAndSave: () => save({ flushAll: true }),
   };
 }

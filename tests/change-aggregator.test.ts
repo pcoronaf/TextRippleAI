@@ -155,6 +155,25 @@ describe('ChangeAggregator', () => {
     expect(agg.drain(5000 + IDLE)[0]).toMatchObject({ before: 'Two', after: 'Three' });
   });
 
+  it('adopts a server-applied state without recording it as a human edit', () => {
+    // What an accepted AI proposal looks like from the editor's side: the text
+    // changed, but the ledger entry for it was already written server-side.
+    const agg = aggregator([block('p_1', 'Original.')]);
+
+    agg.reset([block('p_1', 'Rewritten by an accepted proposal.')]);
+    expect(agg.pendingCount).toBe(0);
+
+    agg.observe([block('p_1', 'Rewritten by an accepted proposal.')], 100);
+    expect(agg.drainAll(100)).toEqual([]);
+
+    // Subsequent typing is measured against the new text, not the old.
+    agg.observe([block('p_1', 'Rewritten by an accepted proposal, then edited.')], 200);
+    expect(agg.drain(200 + IDLE)[0]).toMatchObject({
+      before: 'Rewritten by an accepted proposal.',
+      after: 'Rewritten by an accepted proposal, then edited.',
+    });
+  });
+
   it('classifies a whitespace-only edit as typographical', () => {
     const agg = aggregator([block('p_1', 'Zero  Trust assumes nothing.')]);
     agg.observe([block('p_1', 'Zero Trust assumes nothing.')], 100);

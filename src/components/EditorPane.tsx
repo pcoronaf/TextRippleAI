@@ -8,6 +8,7 @@ import TableRow from '@tiptap/extension-table-row';
 import Underline from '@tiptap/extension-underline';
 import { BubbleMenu, EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { useEffect } from 'react';
 
 import { TEXT_BLOCK_TYPES } from '@/core/document';
 import { PersistentId } from '@/editor/extensions/persistent-id';
@@ -27,7 +28,9 @@ export interface EditorPaneProps {
   onBlur?: () => void;
   onSelectionChange?: (selection: EditorSelection) => void;
   /** Raised by the floating toolbar. The selection is already reported. */
-  onAskAction?: (action: 'ask' | 'explain') => void;
+  onAskAction?: (action: 'ask' | 'explain' | 'modify') => void;
+  /** Handed the editor once it exists, so an accepted proposal can be applied. */
+  onEditorReady?: (editor: Editor) => void;
 }
 
 /**
@@ -65,6 +68,7 @@ export function EditorPane({
   onBlur,
   onSelectionChange,
   onAskAction,
+  onEditorReady,
 }: EditorPaneProps) {
   const editor = useEditor({
     // Tiptap must not render during SSR; the document is hydrated client-side.
@@ -92,6 +96,10 @@ export function EditorPane({
     onBlur: () => onBlur?.(),
   });
 
+  useEffect(() => {
+    if (editor) onEditorReady?.(editor);
+  }, [editor, onEditorReady]);
+
   return (
     <div className="editor-scroll">
       {editor && (
@@ -103,9 +111,7 @@ export function EditorPane({
           <div className="bubble-menu">
             <button onClick={() => onAskAction?.('ask')}>Ask AI</button>
             <button onClick={() => onAskAction?.('explain')}>Explain</button>
-            <button disabled title="Proposed rewrites arrive in M3">
-              Modify
-            </button>
+            <button onClick={() => onAskAction?.('modify')}>Modify</button>
             <button disabled title="Consistency analysis arrives in M5">
               Check consistency
             </button>

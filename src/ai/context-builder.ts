@@ -65,11 +65,24 @@ export interface BuildContextInput {
   blockId: string;
   /** The author's selection; falls back to the whole block. */
   selectionText?: string;
+  /**
+   * What the author had highlighted, when the request covers the whole block
+   * anyway (a rewrite). Sent so the model knows where to concentrate.
+   */
+  highlight?: string;
   question: string;
   /** Ledger entries for this block, newest first. */
   recentChanges?: ChangeRecord[];
   /** Prior turns in this conversation, oldest first. */
   history?: MessageRecord[];
+  /**
+   * Send the surroundings even though there is conversation history.
+   *
+   * A follow-up question can lean on what was already said, but a rewrite has
+   * to produce text that joins cleanly to the paragraphs on either side, so it
+   * needs them in front of it every time.
+   */
+  resendSurroundings?: boolean;
   budgetTokens?: number;
 }
 
@@ -102,7 +115,7 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
   const budgetTokens = input.budgetTokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
 
   const history = (input.history ?? []).slice(-MAX_HISTORY_TURNS);
-  const isFollowUp = history.length > 0;
+  const isFollowUp = history.length > 0 && input.resendSurroundings !== true;
 
   const candidates: Candidate[] = [
     { label: 'Selected text', text: selectedText, priority: 0, required: true },
@@ -128,6 +141,11 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
         text: truncate(next.text, MAX_NEIGHBOUR_CHARS),
         priority: 2,
       });
+    }
+
+    const highlight = input.highlight?.trim();
+    if (highlight && highlight !== selectedText) {
+      candidates.push({ label: "The author's highlight", text: highlight, priority: 2 });
     }
 
     const changes = describeChanges(input.recentChanges ?? [], input.blockId);
@@ -176,6 +194,7 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
     'Where this sits',
     'Previous paragraph',
     'Selected text',
+    "The author's highlight",
     'Next paragraph',
     'Recent changes to this passage',
   ];

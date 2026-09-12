@@ -69,6 +69,23 @@ export class ChangeAggregator {
     return this.pending.size;
   }
 
+  /**
+   * Adopt a document state that arrived from the server rather than from the
+   * keyboard - an accepted AI proposal, say.
+   *
+   * The difference has already been recorded in the ledger by whatever applied
+   * it, so it must not be re-detected here as a human edit. Callers flush
+   * pending work before rebasing; anything still outstanding is dropped
+   * deliberately, because it is no longer measured against a state that exists.
+   */
+  reset(blocks: FlatBlock[]): void {
+    this.baseline = new Map(blocks.map((block) => [block.id, { text: block.text, type: block.type }]));
+    this.current = new Map(
+      blocks.map((block) => [block.id, { text: block.text, type: block.type }]),
+    );
+    this.pending.clear();
+  }
+
   /** Block IDs with edits not yet written to the ledger. */
   get pendingBlockIds(): string[] {
     return [...this.pending.keys()];

@@ -5,6 +5,9 @@ import {
   ConversationNotFoundError,
   DocumentNotFoundError,
   RevisionConflictError,
+  SuggestionNotFoundError,
+  SuggestionResolvedError,
+  SuggestionStaleError,
 } from '@/store';
 
 /**
@@ -21,8 +24,16 @@ export function handleError(error: unknown): NextResponse {
   if (error instanceof ConversationNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
+  if (error instanceof SuggestionNotFoundError) {
+    return NextResponse.json({ error: error.message }, { status: 404 });
+  }
   if (error instanceof BlockNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+  // Both mean the ground moved under this proposal: the author needs to look
+  // again rather than retry.
+  if (error instanceof SuggestionResolvedError || error instanceof SuggestionStaleError) {
+    return NextResponse.json({ error: error.message }, { status: 409 });
   }
   if (error instanceof RevisionConflictError) {
     return NextResponse.json(

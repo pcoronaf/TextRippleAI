@@ -7,8 +7,18 @@
 
 import type { Pool, PoolClient } from 'pg';
 
-import { emptyDocument, ensureNodeIds, inferTitle } from '@/core/document';
-import { newCheckpointId, newConversationId, newDocumentId, newMessageId } from '@/core/ids';
+import { replaceBlockText } from '@/core/apply';
+import { classifyChange } from '@/core/classify';
+import { emptyDocument, ensureNodeIds, flattenBlocks, inferTitle } from '@/core/document';
+import { contentHash } from '@/core/hash';
+import {
+  newChangeId,
+  newCheckpointId,
+  newConversationId,
+  newDocumentId,
+  newMessageId,
+  newSuggestionRecordId,
+} from '@/core/ids';
 import type {
   ChangeClassification,
   ChangeOperation,
@@ -24,6 +34,8 @@ import type {
   ConversationRecord,
   MessageRecord,
   MessageRole,
+  SuggestionRecord,
+  SuggestionStatus,
 } from '@/core/types';
 
 import { buildNodeRecords, toChangeRecords } from './records';
@@ -31,10 +43,17 @@ import {
   ConversationNotFoundError,
   DocumentNotFoundError,
   RevisionConflictError,
+  SuggestionNotFoundError,
+  SuggestionResolvedError,
+  SuggestionStaleError,
+  type AcceptSuggestionInput,
+  type AcceptSuggestionResult,
   type AppendMessageInput,
   type CreateConversationInput,
   type CreateDocumentInput,
+  type CreateSuggestionInput,
   type ListChangesOptions,
+  type ListSuggestionsOptions,
   type SaveDocumentInput,
   type SaveDocumentResult,
   type Store,
@@ -138,6 +157,33 @@ function toMessage(row: Row): MessageRecord {
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
     contextDigest: row.context_digest ?? null,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+function toSuggestion(row: Row): SuggestionRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    blockId: row.block_id,
+    conversationId: row.conversation_id,
+    instruction: row.instruction,
+    before: row.before_content,
+    proposed: row.proposed_content,
+    rationale: row.rationale,
+    selectionStart: row.selection_start,
+    selectionEnd: row.selection_end,
+    status: row.status as SuggestionStatus,
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    contextDigest: row.context_digest ?? null,
+    parentSuggestionId: row.parent_suggestion_id,
+    baseRevision: row.base_revision,
+    changeId: row.change_id,
+    resolvedBy: row.resolved_by,
+    resolvedAt: row.resolved_at ? toIso(row.resolved_at) : null,
     createdAt: toIso(row.created_at),
   };
 }
@@ -572,4 +618,230 @@ export class PostgresStore implements Store {
     );
     return rows.map(toMessage);
   }
+
+  // ---- Suggestions --------------------------------------------------------
+
+  async createSuggestion(
+    documentId: string,
+    input: CreateSuggestionInput,
+  ): Promise<SuggestionRecord> {
+    const rows = await this.query(
+      `insert into suggestions
+           (id, document_id, block_id, conversation_id, instruction, before_content,
+            proposed_content, rationale, selection_start, selection_end, status,
+            provider, model, input_tokens, output_tokens, context_digest,
+            parent_suggestion_id, base_revision)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'generated', $11, $12, $13, $14, $15, $16, $17)
+       returning *`,
+      [
+        newSuggestionRecordId(),
+        documentId,
+        input.blockId,
+        input.conversationId,
+        input.instruction,
+        input.before,
+        input.proposed,
+        input.rationale,
+        input.selectionStart,
+        input.selectionEnd,
+        input.provider,
+        input.model,
+        input.inputTokens,
+        input.outputTokens,
+        input.contextDigest ? JSON.stringify(input.contextDigest) : null,
+        input.parentSuggestionId,
+        input.baseRevision,
+      ],
+    );
+    return toSuggestion(rows[0]);
+  }
+
+  async getSuggestion(documentId: string, suggestionId: string): Promise<SuggestionRecord | null> {
+    const rows = await this.query(
+      'select * from suggestions where document_id = $1 and id = $2',
+      [documentId, suggestionId],
+    );
+    return rows.length > 0 ? toSuggestion(rows[0]) : null;
+  }
+
+  async listSuggestions(
+    documentId: string,
+    options: ListSuggestionsOptions = {},
+  ): Promise<SuggestionRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from suggestions where document_id = $1';
+
+    if (options.blockId) {
+      values.push(options.blockId);
+      sql += ` and block_id = $${values.length}`;
+    }
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+    sql += ' order by created_at desc';
+
+    return (await this.query(sql, values)).map(toSuggestion);
+  }
+
+  async setSuggestionStatus(
+    documentId: string,
+    suggestionId: string,
+    input: { status: Exclude<SuggestionStatus, 'accepted'>; resolvedBy?: string },
+  ): Promise<SuggestionRecord> {
+    return this.transaction(async (client) => {
+      const current = await client.query(
+        'select * from suggestions where document_id = $1 and id = $2 for update',
+        [documentId, suggestionId],
+      );
+      if (current.rows.length === 0) throw new SuggestionNotFoundError(suggestionId);
+
+      const status = current.rows[0].status as SuggestionStatus;
+      if (isResolved(status)) throw new SuggestionResolvedError(suggestionId, status);
+
+      const terminal = input.status === 'rejected' || input.status === 'revised';
+      const updated = await client.query(
+        `update suggestions
+            set status      = $3,
+                resolved_by = case when $4::boolean then $5 else resolved_by end,
+                resolved_at = case when $4::boolean then now() else resolved_at end
+          where document_id = $1 and id = $2
+          returning *`,
+        [documentId, suggestionId, input.status, terminal, input.resolvedBy ?? null],
+      );
+
+      return toSuggestion(updated.rows[0]);
+    });
+  }
+
+  async acceptSuggestion(
+    documentId: string,
+    suggestionId: string,
+    input: AcceptSuggestionInput,
+  ): Promise<AcceptSuggestionResult> {
+    return this.transaction(async (client) => {
+      const locked = await client.query(
+        `select d.id, d.workspace_id, d.title, d.content, d.current_revision, d.status,
+                d.created_at, d.updated_at
+           from documents d
+          where d.id = $1
+          for update`,
+        [documentId],
+      );
+      if (locked.rows.length === 0) throw new DocumentNotFoundError(documentId);
+
+      const found = await client.query(
+        'select * from suggestions where document_id = $1 and id = $2 for update',
+        [documentId, suggestionId],
+      );
+      if (found.rows.length === 0) throw new SuggestionNotFoundError(suggestionId);
+
+      const suggestion = toSuggestion(found.rows[0]);
+      if (isResolved(suggestion.status)) {
+        throw new SuggestionResolvedError(suggestionId, suggestion.status);
+      }
+
+      const currentRevision: number = locked.rows[0].current_revision;
+      if (currentRevision !== input.expectedRevision) {
+        throw new RevisionConflictError(input.expectedRevision, currentRevision);
+      }
+
+      const currentContent = locked.rows[0].content as DocumentContent;
+      const block = flattenBlocks(currentContent).find((entry) => entry.id === suggestion.blockId);
+      if (!block || block.text !== suggestion.before) {
+        throw new SuggestionStaleError(suggestionId);
+      }
+
+      const revision = currentRevision + 1;
+      const { content } = ensureNodeIds(
+        replaceBlockText(currentContent, suggestion.blockId, suggestion.proposed),
+      );
+      const title = inferTitle(content, locked.rows[0].title);
+
+      const updatedDocument = await client.query(
+        `update documents
+            set content = $2, title = $3, current_revision = $4, updated_at = now()
+          where id = $1
+          returning id, workspace_id, title, current_revision, status, created_at, updated_at`,
+        [documentId, JSON.stringify(content), title, revision],
+      );
+
+      await client.query(
+        `insert into document_versions (document_id, revision, content, created_by)
+         values ($1, $2, $3, $4)`,
+        [documentId, revision, JSON.stringify(content), input.acceptedBy],
+      );
+
+      const existingNodes = await client.query(
+        `select id, document_id, parent_id, type, position, revision, text, content_hash,
+                created_at, updated_at
+           from document_nodes where document_id = $1`,
+        [documentId],
+      );
+      await this.writeNodes(
+        client,
+        documentId,
+        buildNodeRecords(documentId, content, revision, existingNodes.rows.map(toNode)),
+      );
+
+      const changeId = newChangeId();
+      const model = suggestion.model
+        ? `${suggestion.provider ?? 'unknown'}:${suggestion.model}`
+        : null;
+
+      const insertedChange = await client.query(
+        `insert into changes
+             (id, document_id, block_id, block_type, author_id, source, operation, classification,
+              before_content, after_content, before_hash, after_hash, session_id, revision,
+              checkpoint_id, impact_status, prompt, model, suggestion_id, occurred_at, created_at)
+         values ($1, $2, $3, $4, $5, 'ai_accepted', 'replace', $6, $7, $8, $9, $10, $11, $12,
+                 null, 'pending', $13, $14, $15, now(), now())
+         returning *`,
+        [
+          changeId,
+          documentId,
+          suggestion.blockId,
+          block.type,
+          input.acceptedBy,
+          classifyChange({
+            blockType: block.type,
+            operation: 'replace',
+            before: block.text,
+            after: suggestion.proposed,
+          }),
+          block.text,
+          suggestion.proposed,
+          contentHash(block.text),
+          contentHash(suggestion.proposed),
+          // For an accepted proposal the "session" is the conversation it came
+          // out of, which is what someone tracing the edit would want next.
+          suggestion.conversationId ?? suggestionId,
+          revision,
+          suggestion.instruction,
+          model,
+          suggestionId,
+        ],
+      );
+
+      const accepted = await client.query(
+        `update suggestions
+            set status = 'accepted', change_id = $3, resolved_by = $4, resolved_at = now()
+          where document_id = $1 and id = $2
+          returning *`,
+        [documentId, suggestionId, changeId, input.acceptedBy],
+      );
+
+      return {
+        document: toDocument(updatedDocument.rows[0]),
+        content,
+        change: toChange(insertedChange.rows[0]),
+        suggestion: toSuggestion(accepted.rows[0]),
+      };
+    });
+  }
+}
+
+/** A proposal that has reached a terminal state cannot be resolved again. */
+function isResolved(status: SuggestionStatus): boolean {
+  return status === 'accepted' || status === 'rejected' || status === 'revised';
 }

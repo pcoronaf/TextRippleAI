@@ -222,3 +222,54 @@ export interface MessageRecord {
   contextDigest: ContextDigest | null;
   createdAt: string;
 }
+
+// --------------------------------------------------------------------------
+// Suggestions (M3)
+// --------------------------------------------------------------------------
+
+/**
+ * AI proposals and accepted document edits are separate things. A suggestion is
+ * inert: it changes nothing until the author accepts it.
+ *
+ *   GENERATED ─┬─> REJECTED
+ *              ├─> DISCUSSED ──> REVISED   (superseded by a newer proposal)
+ *              └─> ACCEPTED ──> document change
+ */
+export type SuggestionStatus =
+  | 'generated'
+  | 'discussed'
+  | 'revised'
+  | 'accepted'
+  | 'rejected';
+
+export interface SuggestionRecord {
+  id: string;
+  documentId: string;
+  blockId: string;
+  /** The conversation this proposal can be discussed in. */
+  conversationId: string | null;
+  /** What the author asked for. */
+  instruction: string;
+  /** The block's text when the proposal was made - the staleness guard. */
+  before: string;
+  proposed: string;
+  rationale: string;
+  /** Where the author was highlighting, recorded for provenance only. */
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  status: SuggestionStatus;
+  provider: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  contextDigest: ContextDigest | null;
+  /** Set when this proposal supersedes an earlier one. */
+  parentSuggestionId: string | null;
+  /** Document revision the proposal was generated against. */
+  baseRevision: number;
+  /** The ledger entry created on acceptance. */
+  changeId: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}

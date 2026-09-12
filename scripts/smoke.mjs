@@ -334,6 +334,172 @@ async function main() {
   });
   check('an empty question is rejected', noQuestion.status === 400, `got ${noQuestion.status}`);
 
+  console.log('\nPropose a rewrite');
+  const revisionOf = async () => (await json(`/api/documents/${id}`)).document.currentRevision;
+  const textOf = async (blockId) => {
+    const current = await json(`/api/documents/${id}`);
+    const node = current.content.content.find((entry) => entry.attrs?.id === blockId);
+    return (node?.content ?? []).map((child) => child.text ?? '').join('');
+  };
+
+  const beforeText = await textOf(blockIds[1]);
+  const revisionBefore = await revisionOf();
+
+  const proposal = await json('/api/ai/modify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      documentId: id,
+      blockId: blockIds[1],
+      instruction: 'Make this assertion less absolute.',
+    }),
+  });
+
+  const suggestion = proposal.suggestion;
+  check('a proposal was recorded', Boolean(suggestion?.id));
+  check('it starts unresolved', suggestion?.status === 'generated');
+  check('it captures the passage it was written against', suggestion?.before === beforeText);
+  check('it proposes different text', suggestion?.proposed !== beforeText);
+  check('it records the instruction', suggestion?.instruction === 'Make this assertion less absolute.');
+  check('it records the model that produced it', Boolean(suggestion?.model));
+
+  check(
+    'proposing does not touch the document',
+    (await revisionOf()) === revisionBefore && (await textOf(blockIds[1])) === beforeText,
+  );
+
+  console.log('\nRejecting changes nothing');
+  const rejected = await json(
+    `/api/documents/${id}/suggestions/${suggestion.id}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'reject' }),
+    },
+  );
+  check('the proposal is marked rejected', rejected.suggestion?.status === 'rejected');
+  check(
+    'the document is untouched after a rejection',
+    (await revisionOf()) === revisionBefore && (await textOf(blockIds[1])) === beforeText,
+  );
+
+  const acceptRejected = await api(`/api/documents/${id}/suggestions/${suggestion.id}/resolve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'accept', expectedRevision: revisionBefore }),
+  });
+  check('a rejected proposal cannot be accepted', acceptRejected.status === 409);
+
+  console.log('\nRevising a proposal');
+  const first = (
+    await json('/api/ai/modify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        documentId: id,
+        blockId: blockIds[2],
+        instruction: 'Soften this.',
+      }),
+    })
+  ).suggestion;
+
+  const revisedProposal = (
+    await json('/api/ai/modify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        documentId: id,
+        blockId: blockIds[2],
+        instruction: 'Softer still.',
+        parentSuggestionId: first.id,
+      }),
+    })
+  ).suggestion;
+
+  check('the revision points back at what it replaced', revisedProposal.parentSuggestionId === first.id);
+  const supersededList = await json(
+    `/api/documents/${id}/suggestions?blockId=${encodeURIComponent(blockIds[2])}`,
+  );
+  const superseded = supersededList.suggestions.find((entry) => entry.id === first.id);
+  check('the earlier proposal is marked superseded', superseded?.status === 'revised');
+
+  console.log('\nAccepting applies the change and records its provenance');
+  const accepted = await json(
+    `/api/documents/${id}/suggestions/${revisedProposal.id}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'accept', expectedRevision: await revisionOf() }),
+    },
+  );
+
+  check('the revision advanced', accepted.document.currentRevision > revisionBefore);
+  check('the document now holds the proposed text', await (async () =>
+    (await textOf(blockIds[2])) === revisedProposal.proposed)());
+  check('the paragraph kept its identity', accepted.change?.blockId === blockIds[2]);
+  check('the ledger entry is attributed to the AI', accepted.change?.source === 'ai_accepted');
+  check('the ledger entry records the prompt', accepted.change?.prompt === 'Softer still.');
+  check('the ledger entry records the model', Boolean(accepted.change?.model));
+  check(
+    'the ledger entry points back at the proposal',
+    accepted.change?.suggestionId === revisedProposal.id,
+  );
+  check('the proposal points back at the ledger entry', accepted.suggestion?.changeId === accepted.change?.id);
+  check('the proposal is marked accepted', accepted.suggestion?.status === 'accepted');
+
+  const acceptedAgain = await api(
+    `/api/documents/${id}/suggestions/${revisedProposal.id}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'accept', expectedRevision: await revisionOf() }),
+    },
+  );
+  check('an accepted proposal cannot be applied twice', acceptedAgain.status === 409);
+
+  console.log('\nA proposal whose passage moved on is refused');
+  const stalePending = (
+    await json('/api/ai/modify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        documentId: id,
+        blockId: blockIds[3],
+        instruction: 'Tighten this.',
+      }),
+    })
+  ).suggestion;
+
+  const beforeManualEdit = await json(`/api/documents/${id}`);
+  await json(`/api/documents/${id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: editBlock(beforeManualEdit.content, blockIds[3], 'The author rewrote this by hand.'),
+      expectedRevision: beforeManualEdit.document.currentRevision,
+      changes: [
+        draft(blockIds[3], stalePending.before, 'The author rewrote this by hand.'),
+      ],
+    }),
+  });
+
+  const staleAccept = await api(`/api/documents/${id}/suggestions/${stalePending.id}/resolve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'accept', expectedRevision: await revisionOf() }),
+  });
+  check('a proposal written against older text is refused', staleAccept.status === 409);
+  check(
+    "the author's own edit survived",
+    (await textOf(blockIds[3])) === 'The author rewrote this by hand.',
+  );
+
+  const ledgerWithAi = await json(`/api/documents/${id}/changes`);
+  check(
+    'the ledger holds exactly one AI-accepted entry',
+    ledgerWithAi.changes.filter((change) => change.source === 'ai_accepted').length === 1,
+  );
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

@@ -12,19 +12,19 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 + M1 + M2 complete
+## Status: M0 - M3 complete
 
-This repository implements the first three milestones — the document core, change intelligence,
-and selection-anchored conversation. **No LLM is called anywhere in the editing path.** A model is
-called only when you select a passage and ask about it; typing never triggers a request, and that
-is enforced by a test over the dependency graph, not by convention.
+This repository implements the first four milestones — the document core, change intelligence,
+selection-anchored conversation, and controlled AI editing. **No LLM is called anywhere in the
+editing path, and no model output reaches the document without the author accepting it.** Both
+rules are enforced by a test over the dependency graph, not by convention.
 
 | Milestone | Scope | State |
 |---|---|---|
 | **M0** | Document core: Tiptap editor, persistent node IDs, revisions, DOCX/Markdown import & export | ✅ built |
 | **M1** | Change intelligence: Change Aggregator, Change Ledger, checkpoints, change review | ✅ built |
 | **M2** | Chat with selection: floating toolbar, Context Builder, anchored conversations, token logging | ✅ built |
-| M3 | AI editing — suggestions with accept/reject and provenance | not started |
+| **M3** | AI editing: proposals, diff review, accept/reject/discuss/revise, full provenance | ✅ built |
 | M4 | Semantic index — summaries, pgvector embeddings, hybrid retrieval | schema groundwork only |
 | M5 | Impact analysis — candidate retrieval, ranking, impact briefing | not started |
 | M6–M8 | Propagation, decision memory, advanced document capabilities | not started |
@@ -42,6 +42,9 @@ is enforced by a test over the dependency graph, not by convention.
 - Export back to DOCX, Markdown, plain text or canonical JSON.
 - Select a passage and **ask about it**, or have it explained. The answer is anchored to that
   paragraph, and re-selecting the paragraph resumes the same conversation.
+- Ask for a **rewrite**: the proposal appears as a before/after diff with its rationale, and can be
+  accepted, rejected, discussed or revised. Accepting is the only action that changes the document,
+  and it writes a ledger entry carrying the prompt, the model and the proposal it came from.
 - Every turn shows **Show AI context**: the exact parts that were sent, their token counts, what
   share of the document that was, and what was deliberately withheld.
 
@@ -159,7 +162,11 @@ POST   /api/documents/:id/checkpoints      create
 GET    /api/documents/:id/export           ?format=docx|md|txt|json
 GET    /api/documents/:id/conversations     list, ?anchor=<blockId>
 GET    /api/documents/:id/conversations/:cid  one conversation with its turns
+GET    /api/documents/:id/suggestions      list, ?blockId= &status=
+GET    /api/documents/:id/suggestions/:sid one proposal
+POST   /api/documents/:id/suggestions/:sid/resolve   accept | reject | discuss
 POST   /api/ai/ask                        ask or explain a selection
+POST   /api/ai/modify                     propose a rewrite (writes nothing)
 GET    /api/ai/status                     gateway configuration (no provider call)
 ```
 
