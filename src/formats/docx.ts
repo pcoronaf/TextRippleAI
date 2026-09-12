@@ -155,7 +155,8 @@ function renderBlock(node: ContentNode, docx: DocxModule, context: RenderContext
 function renderInline(nodes: ContentNode[], docx: DocxModule): any[] {
   const { TextRun, ExternalHyperlink } = docx;
 
-  return nodes.flatMap((node) => {
+  // A run may be wrapped in a hyperlink, so the element type is not uniform.
+  return nodes.flatMap((node): any[] => {
     if (node.type === 'hardBreak') return [new TextRun({ text: '', break: 1 })];
     if (typeof node.text !== 'string') return [];
 
