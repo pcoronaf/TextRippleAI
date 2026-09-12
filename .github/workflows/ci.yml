@@ -29,6 +29,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Smoke test the running app
+        run: |
+          npm start &
+          node scripts/smoke.mjs
+
   migrations:
     name: PostgreSQL schema
     runs-on: ubuntu-latest
