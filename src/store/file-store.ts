@@ -64,6 +64,7 @@ import {
   type CreateConversationInput,
   type CreateSuggestionInput,
   type CreateDocumentInput,
+  type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
   type SaveDocumentInput,
