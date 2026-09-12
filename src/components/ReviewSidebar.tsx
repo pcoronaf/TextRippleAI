@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { CLASSIFICATION_LABELS, isTrivial } from '@/core/classify';
 import type { ChangeRecord, ChangesSinceSummary, CheckpointRecord } from '@/core/types';
 
+import { AskPanel, type AskPanelProps } from './AskPanel';
 import { DiffView } from './DiffView';
 
 export type SidebarTab = 'changes' | 'checkpoints' | 'ask' | 'impact' | 'decisions';
@@ -21,6 +22,9 @@ export interface ReviewSidebarProps {
   onCreateCheckpoint: (name: string) => Promise<void>;
   onSelectBlock: (blockId: string) => void;
   busy: boolean;
+  tab: SidebarTab;
+  onTabChange: (tab: SidebarTab) => void;
+  ask: AskPanelProps;
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -31,7 +35,7 @@ const OPERATION_LABELS: Record<string, string> = {
 };
 
 export function ReviewSidebar(props: ReviewSidebarProps) {
-  const [tab, setTab] = useState<SidebarTab>('changes');
+  const { tab, onTabChange } = props;
 
   return (
     <>
@@ -49,7 +53,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
             key={value}
             role="tab"
             aria-selected={tab === value}
-            onClick={() => setTab(value)}
+            onClick={() => onTabChange(value)}
           >
             {label}
           </button>
@@ -58,15 +62,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
 
       {tab === 'changes' && <ChangesPanel {...props} />}
       {tab === 'checkpoints' && <CheckpointsPanel {...props} />}
-      {tab === 'ask' && (
-        <div className="panel">
-          <p className="panel-note">
-            Selection-based conversation arrives in M2. The AI gateway and provider adapters are
-            already in place; nothing here sends text to a model yet, and ordinary editing never
-            will.
-          </p>
-        </div>
-      )}
+      {tab === 'ask' && <AskPanel {...props.ask} />}
       {tab === 'impact' && (
         <div className="panel">
           <p className="panel-note">

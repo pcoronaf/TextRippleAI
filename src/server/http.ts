@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 
-import { DocumentNotFoundError, RevisionConflictError } from '@/store';
+import { BlockNotFoundError } from '@/ai/context-builder';
+import {
+  ConversationNotFoundError,
+  DocumentNotFoundError,
+  RevisionConflictError,
+} from '@/store';
 
 /**
  * Authentication arrives with the OIDC provider in a later milestone. Until
@@ -12,6 +17,12 @@ export const CURRENT_USER_ID = 'usr_local';
 export function handleError(error: unknown): NextResponse {
   if (error instanceof DocumentNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 404 });
+  }
+  if (error instanceof ConversationNotFoundError) {
+    return NextResponse.json({ error: error.message }, { status: 404 });
+  }
+  if (error instanceof BlockNotFoundError) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
   }
   if (error instanceof RevisionConflictError) {
     return NextResponse.json(

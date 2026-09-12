@@ -10,21 +10,26 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { emptyDocument, ensureNodeIds, inferTitle } from '@/core/document';
-import { newCheckpointId, newDocumentId } from '@/core/ids';
+import { newCheckpointId, newConversationId, newDocumentId, newMessageId } from '@/core/ids';
 import { isTrivial } from '@/core/classify';
 import type {
   ChangeRecord,
   CheckpointRecord,
+  ConversationRecord,
   DocumentContent,
   DocumentNodeRecord,
   DocumentRecord,
   DocumentWithContent,
+  MessageRecord,
 } from '@/core/types';
 
 import { buildNodeRecords, toChangeRecords } from './records';
 import {
+  ConversationNotFoundError,
   DocumentNotFoundError,
   RevisionConflictError,
+  type AppendMessageInput,
+  type CreateConversationInput,
   type CreateDocumentInput,
   type ListChangesOptions,
   type SaveDocumentInput,
@@ -46,6 +51,9 @@ interface DocumentFile {
   changes: ChangeRecord[];
   checkpoints: CheckpointRecord[];
   versions: StoredVersion[];
+  // Added in M2; files written before then will not carry these.
+  conversations?: ConversationRecord[];
+  messages?: MessageRecord[];
 }
 
 /** Snapshots retained per document; checkpoint revisions are always kept. */
@@ -187,6 +195,7 @@ export class FileStore implements Store {
       );
 
       await this.write({
+        ...data,
         document,
         content,
         nodes: buildNodeRecords(id, content, revision, data.nodes),
@@ -282,5 +291,109 @@ export class FileStore implements Store {
   async getVersion(documentId: string, revision: number): Promise<DocumentContent | null> {
     const data = await this.read(documentId);
     return data?.versions.find((version) => version.revision === revision)?.content ?? null;
+  }
+
+  // ---- Conversations ------------------------------------------------------
+
+  async createConversation(
+    documentId: string,
+    input: CreateConversationInput,
+  ): Promise<ConversationRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      const conversation: ConversationRecord = {
+        id: newConversationId(),
+        documentId,
+        anchorBlockId: input.anchorBlockId,
+        selection: input.selection,
+        selectionText: input.selectionText,
+        title: input.title,
+        relatedChangeId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await this.write({
+        ...data,
+        conversations: [...(data.conversations ?? []), conversation],
+      });
+
+      return conversation;
+    });
+  }
+
+  async getConversation(
+    documentId: string,
+    conversationId: string,
+  ): Promise<ConversationRecord | null> {
+    const data = await this.read(documentId);
+    return (data?.conversations ?? []).find((entry) => entry.id === conversationId) ?? null;
+  }
+
+  async listConversations(
+    documentId: string,
+    options: { anchorBlockId?: string } = {},
+  ): Promise<ConversationRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.conversations ?? [])
+      .filter(
+        (conversation) =>
+          !options.anchorBlockId || conversation.anchorBlockId === options.anchorBlockId,
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async appendMessage(
+    documentId: string,
+    conversationId: string,
+    input: AppendMessageInput,
+  ): Promise<MessageRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const conversations = data.conversations ?? [];
+      if (!conversations.some((entry) => entry.id === conversationId)) {
+        throw new ConversationNotFoundError(conversationId);
+      }
+
+      const now = new Date().toISOString();
+      const message: MessageRecord = {
+        id: newMessageId(),
+        conversationId,
+        role: input.role,
+        content: input.content,
+        provider: input.provider ?? null,
+        model: input.model ?? null,
+        inputTokens: input.inputTokens ?? 0,
+        outputTokens: input.outputTokens ?? 0,
+        contextDigest: input.contextDigest ?? null,
+        createdAt: now,
+      };
+
+      await this.write({
+        ...data,
+        conversations: conversations.map((entry) =>
+          entry.id === conversationId ? { ...entry, updatedAt: now } : entry,
+        ),
+        messages: [...(data.messages ?? []), message],
+      });
+
+      return message;
+    });
+  }
+
+  async listMessages(documentId: string, conversationId: string): Promise<MessageRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.messages ?? [])
+      .filter((message) => message.conversationId === conversationId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 }

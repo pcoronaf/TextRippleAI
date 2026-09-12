@@ -162,3 +162,63 @@ export interface ChangesSinceSummary {
   trivial: number;
   byChapter: { chapterId: string | null; title: string; count: number }[];
 }
+
+// --------------------------------------------------------------------------
+// Conversations (M2)
+// --------------------------------------------------------------------------
+
+export type MessageRole = 'user' | 'assistant';
+
+/**
+ * A conversation is an application object anchored to part of the document,
+ * not an ever-growing chat log used as the document's memory. The server
+ * rebuilds the context for every turn from the document itself.
+ */
+export interface ConversationRecord {
+  id: string;
+  documentId: string;
+  /** The block the conversation is anchored to. */
+  anchorBlockId: string | null;
+  selection: { from: number; to: number } | null;
+  selectionText: string;
+  title: string;
+  relatedChangeId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One part of the context package assembled for a request. */
+export interface ContextPart {
+  label: string;
+  text: string;
+  tokens: number;
+}
+
+/**
+ * What was actually sent to the model, recorded so the author can inspect it.
+ * The spec's "Show AI context" control depends on this being kept.
+ */
+export interface ContextDigest {
+  parts: ContextPart[];
+  totalTokens: number;
+  /** Estimated tokens in the whole document, for the share-sent metric. */
+  documentTokens: number;
+  documentPercent: number;
+  budgetTokens: number;
+  /** Parts omitted because the budget ran out. */
+  omitted: string[];
+}
+
+export interface MessageRecord {
+  id: string;
+  conversationId: string;
+  role: MessageRole;
+  content: string;
+  provider: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  /** Present on user turns: the context package that accompanied them. */
+  contextDigest: ContextDigest | null;
+  createdAt: string;
+}

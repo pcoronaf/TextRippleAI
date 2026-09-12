@@ -97,6 +97,8 @@ async function main() {
           { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter One' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'The opening paragraph.' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'The second paragraph.' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'A distant paragraph about badgers.' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Another distant paragraph about otters.' }] },
         ],
       },
     }),
@@ -197,6 +199,122 @@ async function main() {
   const markdown = await (await api(`/api/documents/${id}/export?format=md`)).text();
   check('Markdown export keeps the heading', markdown.includes('# Chapter One'));
   check('Markdown export keeps revised prose', markdown.includes('rewritten'));
+
+  console.log('\nAsk about a selection');
+  const asked = await json('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      documentId: id,
+      blockId: blockIds[1],
+      question: 'Is this statement too absolute?',
+    }),
+  });
+
+  check('a conversation was created', Boolean(asked.conversation?.id));
+  check('the conversation is anchored to the block', asked.conversation?.anchorBlockId === blockIds[1]);
+  check('the turn produced a question and an answer', asked.messages?.length === 2);
+  check(
+    'the answer came from the configured provider',
+    typeof asked.messages?.[1]?.content === 'string' && asked.messages[1].content.length > 0,
+  );
+
+  const context = asked.context;
+  const contextText = (context?.parts ?? []).map((part) => part.text).join('\n');
+
+  check('the selection was sent', contextText.includes('The opening paragraph, revised.'));
+  check('the neighbouring paragraph was sent', contextText.includes('The second paragraph'));
+  check(
+    'distant paragraphs were not sent',
+    !contextText.includes('badgers') && !contextText.includes('otters'),
+  );
+  check(
+    'the context stayed under the token budget',
+    context?.totalTokens < context?.budgetTokens,
+    `${context?.totalTokens} of ${context?.budgetTokens}`,
+  );
+  check(
+    'only a fraction of the document was sent',
+    context?.documentPercent > 0 && context?.documentPercent < 100,
+    `${context?.documentPercent}%`,
+  );
+  check(
+    'context not yet available is named rather than faked',
+    (context?.omitted ?? []).some((entry) => entry.includes('summaries')),
+  );
+
+  console.log('\nFollow-up stays in the same conversation');
+  const followUp = await json('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      documentId: id,
+      blockId: blockIds[1],
+      conversationId: asked.conversation.id,
+      question: 'What would you soften first?',
+    }),
+  });
+
+  check('the same conversation was continued', followUp.conversation?.id === asked.conversation.id);
+  check(
+    'the surroundings were not resent',
+    (followUp.context?.omitted ?? []).some((entry) => entry.includes('already present')),
+  );
+  check(
+    'the follow-up context is smaller than the first turn',
+    followUp.context.parts.length < asked.context.parts.length,
+  );
+
+  const thread = await json(`/api/documents/${id}/conversations/${asked.conversation.id}`);
+  check('the thread holds all four turns', thread.messages?.length === 4, `${thread.messages?.length}`);
+  check(
+    'turns alternate question and answer',
+    thread.messages.map((message) => message.role).join(',') === 'user,assistant,user,assistant',
+  );
+  check(
+    'the question turn records what context accompanied it',
+    Boolean(thread.messages[0].contextDigest),
+  );
+  check(
+    'the answer turn records provenance',
+    Boolean(thread.messages[1].model) && Boolean(thread.messages[1].provider),
+  );
+
+  const anchored = await json(
+    `/api/documents/${id}/conversations?anchor=${encodeURIComponent(blockIds[1])}`,
+  );
+  check('the conversation is found by its anchor', anchored.conversations?.length === 1);
+
+  const elsewhere = await json(
+    `/api/documents/${id}/conversations?anchor=${encodeURIComponent(blockIds[2])}`,
+  );
+  check('another block has no conversation of its own', elsewhere.conversations?.length === 0);
+
+  console.log('\nExplain needs no question');
+  const explained = await json('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ documentId: id, blockId: blockIds[2], action: 'explain' }),
+  });
+  check('explain produced an answer', explained.messages?.length === 2);
+  check(
+    'explain opened its own conversation',
+    explained.conversation?.id !== asked.conversation.id,
+  );
+
+  const badBlock = await api('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ documentId: id, blockId: 'p_nonexistent', question: 'Hello?' }),
+  });
+  check('an unknown block is rejected', badBlock.status === 400, `got ${badBlock.status}`);
+
+  const noQuestion = await api('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ documentId: id, blockId: blockIds[1] }),
+  });
+  check('an empty question is rejected', noQuestion.status === 400, `got ${noQuestion.status}`);
 
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });

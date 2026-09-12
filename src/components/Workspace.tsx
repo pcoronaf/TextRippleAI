@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { buildOutline } from '@/core/document';
 import { useDocumentSession } from '@/editor/use-document-session';
+import type { TokenUsage } from '@/ai/types';
 import type {
   ChangeRecord,
   ChangesSinceSummary,
@@ -12,8 +13,15 @@ import type {
   DocumentRecord,
 } from '@/core/types';
 
-import { EditorPane } from './EditorPane';
-import { ReviewSidebar } from './ReviewSidebar';
+import { EditorPane, type EditorSelection } from './EditorPane';
+import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
+
+/** Counted in the browser so the author can see the cost of what they asked for. */
+interface SessionUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
 
 export function Workspace({
   document: record,
@@ -28,6 +36,11 @@ export function Workspace({
   const [checkpoints, setCheckpoints] = useState<CheckpointRecord[]>([]);
   const [scope, setScope] = useState<string | null>(null);
   const [hideTrivial, setHideTrivial] = useState(false);
+
+  const [tab, setTab] = useState<SidebarTab>('changes');
+  const [selection, setSelection] = useState<EditorSelection | null>(null);
+  const [trigger, setTrigger] = useState<{ action: 'ask' | 'explain'; nonce: number } | null>(null);
+  const [usage, setUsage] = useState<SessionUsage>({ calls: 0, inputTokens: 0, outputTokens: 0 });
 
   const refresh = useCallback(async () => {
     const query = new URLSearchParams();
@@ -62,6 +75,19 @@ export function Workspace({
     },
     [handleUpdate],
   );
+
+  const onAskAction = useCallback((action: 'ask' | 'explain') => {
+    setTab('ask');
+    setTrigger({ action, nonce: Date.now() });
+  }, []);
+
+  const onUsage = useCallback((turn: TokenUsage) => {
+    setUsage((previous) => ({
+      calls: previous.calls + 1,
+      inputTokens: previous.inputTokens + turn.inputTokens,
+      outputTokens: previous.outputTokens + turn.outputTokens,
+    }));
+  }, []);
 
   const outline = useMemo(() => buildOutline(content), [content]);
 
@@ -120,11 +146,15 @@ export function Workspace({
             initialContent={initialContent}
             onChange={onEditorChange}
             onBlur={() => void flushAndSave()}
+            onSelectionChange={setSelection}
+            onAskAction={onAskAction}
           />
         </main>
 
         <aside className="pane">
           <ReviewSidebar
+            tab={tab}
+            onTabChange={setTab}
             changes={changes}
             summary={summary}
             checkpoints={checkpoints}
@@ -138,6 +168,12 @@ export function Workspace({
             }}
             onSelectBlock={scrollToBlock}
             busy={state.saving}
+            ask={{
+              documentId: record.id,
+              selection,
+              trigger,
+              onUsage,
+            }}
           />
         </aside>
       </div>
@@ -159,8 +195,11 @@ export function Workspace({
               ? `Saved ${new Date(state.lastSavedAt).toLocaleTimeString()}`
               : 'Not saved yet'}
         </span>
-        <span className="spacer" style={{ flex: 1 }} />
-        <span>0 LLM calls this session</span>
+        <span style={{ flex: 1 }} />
+        <span title="Editing never calls a model; only the actions you take do.">
+          {usage.calls} LLM call{usage.calls === 1 ? '' : 's'} this session
+          {usage.calls > 0 && ` · ${usage.inputTokens + usage.outputTokens} tokens`}
+        </span>
         {state.error && <span className="error">{state.error}</span>}
       </footer>
     </div>

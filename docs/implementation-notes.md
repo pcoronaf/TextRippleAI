@@ -1,8 +1,10 @@
-# Implementation notes — M0 and M1
+# Implementation notes
+
+## M0 and M1 — document core and change ledger
 
 Decisions taken while turning `design-spec.md` into code, where the code departs from the spec, and
 what is knowingly left undone. This is the record the spec's "next engineering artifact" section
-asks for, scoped to the first two milestones.
+asks for. Sections are added as each milestone lands.
 
 ---
 
@@ -114,3 +116,78 @@ document infrastructure:
 
 The one deliberately missing piece is the summaries table — M4 builds it, and M2 should degrade to
 neighbouring paragraphs alone until then rather than sending whole chapters.
+
+---
+
+# M2 — Chat with selection
+
+## Decisions
+
+### The client never chooses the context
+
+`POST /api/ai/ask` takes a document ID, a block ID, the selected text and a question. Everything
+else - which neighbours to include, how much structure to describe, what to leave out - is decided
+server-side by `src/ai/context-builder.ts`. A client that could choose its own context would make
+the token-economy guarantees unenforceable and would leak the whole document the first time someone
+wrote a convenient wrapper.
+
+### The context digest is a record, not a debug aid
+
+Every user turn stores the exact parts that were sent, their token counts, the share of the document
+they represent, and what was withheld. The spec lists "Show AI context" as a privacy control; that
+only means something if the record is what actually left the machine, so it is persisted with the
+message rather than recomputed for display.
+
+### Follow-ups do not resend the surroundings
+
+The first turn carries the neighbouring paragraphs and the structural path. On a follow-up those are
+already in the replayed conversation, so only the selection is re-sent and the rest is listed as
+omitted. Paying twice for the same tokens is exactly the failure the token-economy section warns
+about.
+
+### Missing context is named, never faked
+
+Hierarchical summaries (M4) and decisions (M7) are part of the spec's context package and do not
+exist yet. Rather than silently omitting them, the digest lists them as withheld with the milestone
+that will supply them - so a thin answer is legible as missing infrastructure rather than as a
+document with no structure.
+
+### The model is called before anything is written
+
+A provider failure would otherwise leave a user turn in the conversation with no answer, and the
+next follow-up would replay a broken exchange. Nothing is persisted until the completion returns.
+
+### Token counts live on the answer only
+
+The provider reports input tokens for the whole request. Storing an estimate on the question turn as
+well would double-count every conversation. The question turn carries the digest; the answer turn
+carries the real usage.
+
+### Model routing by action
+
+`ask` goes to the reasoning tier - it is judgement about the author's own argument. `explain` goes to
+the fast tier - it is comprehension. Both model IDs are environment-overridable, and the tier names
+never leak above `src/ai`.
+
+## Enforced structurally, not by convention
+
+`tests/architecture.test.ts` asserts over the dependency graph that:
+
+- `src/core`, `src/editor`, `src/store` and `src/formats` cannot reach `src/ai` or any provider SDK,
+  so no editing path can acquire a model call by accident;
+- `src/ai` cannot reach `src/store`, so model output has no write path to the document.
+
+These are the two design rules that the product's credibility rests on. A test over imports catches
+the regression at the moment someone introduces it, rather than on an invoice.
+
+## Known limitations
+
+- **The structural path stands in for the briefs.** Until M4, "Where this sits" is the document
+  title plus the enclosing chapter and section headings. It is honest but thin: a question whose
+  answer depends on Chapter 7 will be answered with "I would need to see that section".
+- **One conversation per block is surfaced.** The store holds many; the sidebar resumes the most
+  recent. A conversation picker belongs with the M8 sidebar work.
+- **No streaming.** Answers arrive whole. For reasoning-tier requests on long passages this is a
+  visible wait; streaming is a UI change, not an architectural one, and can land any time.
+- **Token estimates are four-characters-per-token.** Good enough to hold a budget, wrong by a few
+  per cent per language. The provider's real count is recorded alongside it.

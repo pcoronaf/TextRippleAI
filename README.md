@@ -12,17 +12,18 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 + M1 complete
+## Status: M0 + M1 + M2 complete
 
-This repository currently implements the first two milestones of the plan — the document core and
-change intelligence. **No LLM is called anywhere in the editing path.** The AI gateway exists and is
-configurable, but nothing sends document text to a model yet; that begins at M2.
+This repository implements the first three milestones — the document core, change intelligence,
+and selection-anchored conversation. **No LLM is called anywhere in the editing path.** A model is
+called only when you select a passage and ask about it; typing never triggers a request, and that
+is enforced by a test over the dependency graph, not by convention.
 
 | Milestone | Scope | State |
 |---|---|---|
 | **M0** | Document core: Tiptap editor, persistent node IDs, revisions, DOCX/Markdown import & export | ✅ built |
 | **M1** | Change intelligence: Change Aggregator, Change Ledger, checkpoints, change review | ✅ built |
-| M2 | Chat with selection — Context Builder, AI sidebar | gateway scaffolded, not wired |
+| **M2** | Chat with selection: floating toolbar, Context Builder, anchored conversations, token logging | ✅ built |
 | M3 | AI editing — suggestions with accept/reject and provenance | not started |
 | M4 | Semantic index — summaries, pgvector embeddings, hybrid retrieval | schema groundwork only |
 | M5 | Impact analysis — candidate retrieval, ranking, impact briefing | not started |
@@ -39,6 +40,10 @@ configurable, but nothing sends document text to a model yet; that begins at M2.
 - Create named **checkpoints** ("Methodology approved") and list everything that changed since one,
   broken down by chapter, with typographical noise filterable.
 - Export back to DOCX, Markdown, plain text or canonical JSON.
+- Select a passage and **ask about it**, or have it explained. The answer is anchored to that
+  paragraph, and re-selecting the paragraph resumes the same conversation.
+- Every turn shows **Show AI context**: the exact parts that were sent, their token counts, what
+  share of the document that was, and what was deliberately withheld.
 
 ---
 
@@ -152,7 +157,10 @@ GET    /api/documents/:id/changes          ledger, ?since=<checkpoint> &includeT
 GET    /api/documents/:id/checkpoints      list
 POST   /api/documents/:id/checkpoints      create
 GET    /api/documents/:id/export           ?format=docx|md|txt|json
-GET    /api/ai/status                      gateway configuration (no provider call)
+GET    /api/documents/:id/conversations     list, ?anchor=<blockId>
+GET    /api/documents/:id/conversations/:cid  one conversation with its turns
+POST   /api/ai/ask                        ask or explain a selection
+GET    /api/ai/status                     gateway configuration (no provider call)
 ```
 
 ---

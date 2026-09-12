@@ -8,7 +8,7 @@
 import type { Pool, PoolClient } from 'pg';
 
 import { emptyDocument, ensureNodeIds, inferTitle } from '@/core/document';
-import { newCheckpointId, newDocumentId } from '@/core/ids';
+import { newCheckpointId, newConversationId, newDocumentId, newMessageId } from '@/core/ids';
 import type {
   ChangeClassification,
   ChangeOperation,
@@ -21,12 +21,18 @@ import type {
   DocumentStatus,
   DocumentWithContent,
   ImpactStatus,
+  ConversationRecord,
+  MessageRecord,
+  MessageRole,
 } from '@/core/types';
 
 import { buildNodeRecords, toChangeRecords } from './records';
 import {
+  ConversationNotFoundError,
   DocumentNotFoundError,
   RevisionConflictError,
+  type AppendMessageInput,
+  type CreateConversationInput,
   type CreateDocumentInput,
   type ListChangesOptions,
   type SaveDocumentInput,
@@ -100,6 +106,38 @@ function toCheckpoint(row: Row): CheckpointRecord {
     name: row.name,
     revision: row.revision,
     createdBy: row.created_by,
+    createdAt: toIso(row.created_at),
+  };
+}
+
+function toConversation(row: Row): ConversationRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    anchorBlockId: row.anchor_block_id,
+    selection:
+      row.selection_from === null || row.selection_to === null
+        ? null
+        : { from: row.selection_from, to: row.selection_to },
+    selectionText: row.selection_text,
+    title: row.title,
+    relatedChangeId: row.related_change_id,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+function toMessage(row: Row): MessageRecord {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    role: row.role as MessageRole,
+    content: row.content,
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    contextDigest: row.context_digest ?? null,
     createdAt: toIso(row.created_at),
   };
 }
@@ -432,5 +470,106 @@ export class PostgresStore implements Store {
       [documentId, revision],
     );
     return rows.length > 0 ? (rows[0].content as DocumentContent) : null;
+  }
+
+  // ---- Conversations ------------------------------------------------------
+
+  async createConversation(
+    documentId: string,
+    input: CreateConversationInput,
+  ): Promise<ConversationRecord> {
+    const rows = await this.query(
+      `insert into conversations
+           (id, document_id, anchor_block_id, selection_from, selection_to, selection_text, title)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       returning *`,
+      [
+        newConversationId(),
+        documentId,
+        input.anchorBlockId,
+        input.selection?.from ?? null,
+        input.selection?.to ?? null,
+        input.selectionText,
+        input.title,
+      ],
+    );
+    return toConversation(rows[0]);
+  }
+
+  async getConversation(
+    documentId: string,
+    conversationId: string,
+  ): Promise<ConversationRecord | null> {
+    const rows = await this.query(
+      'select * from conversations where document_id = $1 and id = $2',
+      [documentId, conversationId],
+    );
+    return rows.length > 0 ? toConversation(rows[0]) : null;
+  }
+
+  async listConversations(
+    documentId: string,
+    options: { anchorBlockId?: string } = {},
+  ): Promise<ConversationRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from conversations where document_id = $1';
+
+    if (options.anchorBlockId) {
+      values.push(options.anchorBlockId);
+      sql += ` and anchor_block_id = $${values.length}`;
+    }
+    sql += ' order by updated_at desc';
+
+    return (await this.query(sql, values)).map(toConversation);
+  }
+
+  async appendMessage(
+    documentId: string,
+    conversationId: string,
+    input: AppendMessageInput,
+  ): Promise<MessageRecord> {
+    return this.transaction(async (client) => {
+      const owner = await client.query(
+        'select id from conversations where document_id = $1 and id = $2 for update',
+        [documentId, conversationId],
+      );
+      if (owner.rows.length === 0) throw new ConversationNotFoundError(conversationId);
+
+      const inserted = await client.query(
+        `insert into messages
+             (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, context_digest)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         returning *`,
+        [
+          newMessageId(),
+          conversationId,
+          input.role,
+          input.content,
+          input.provider ?? null,
+          input.model ?? null,
+          input.inputTokens ?? 0,
+          input.outputTokens ?? 0,
+          input.contextDigest ? JSON.stringify(input.contextDigest) : null,
+        ],
+      );
+
+      await client.query('update conversations set updated_at = now() where id = $1', [
+        conversationId,
+      ]);
+
+      return toMessage(inserted.rows[0]);
+    });
+  }
+
+  async listMessages(documentId: string, conversationId: string): Promise<MessageRecord[]> {
+    const rows = await this.query(
+      `select m.*
+         from messages m
+         join conversations c on c.id = m.conversation_id
+        where c.document_id = $1 and m.conversation_id = $2
+        order by m.created_at asc, m.id asc`,
+      [documentId, conversationId],
+    );
+    return rows.map(toMessage);
   }
 }

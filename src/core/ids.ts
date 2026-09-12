@@ -56,3 +56,5 @@ export const newChangeId = () => newId('chg');
 export const newCheckpointId = () => newId('cp');
 export const newSessionId = () => newId('sess');
 export const newSuggestionId = () => newId('sug');
+export const newConversationId = () => newId('conv');
+export const newMessageId = () => newId('msg');

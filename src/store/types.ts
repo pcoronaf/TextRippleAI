@@ -11,11 +11,15 @@ import type {
   ChangeRecord,
   ChangeSource,
   CheckpointRecord,
+  ContextDigest,
+  ConversationRecord,
   DocumentContent,
   DocumentNodeRecord,
   DocumentRecord,
   DocumentWithContent,
   DraftChange,
+  MessageRecord,
+  MessageRole,
 } from '@/core/types';
 
 export interface CreateDocumentInput {
@@ -86,4 +90,49 @@ export interface Store {
 
   listVersions(documentId: string): Promise<{ revision: number; createdAt: string; createdBy: string }[]>;
   getVersion(documentId: string, revision: number): Promise<DocumentContent | null>;
+
+  // ---- Conversations (M2) -------------------------------------------------
+  // `documentId` is carried on every call so a conversation can always be
+  // located without a secondary index.
+
+  createConversation(
+    documentId: string,
+    input: CreateConversationInput,
+  ): Promise<ConversationRecord>;
+  getConversation(documentId: string, conversationId: string): Promise<ConversationRecord | null>;
+  listConversations(
+    documentId: string,
+    options?: { anchorBlockId?: string },
+  ): Promise<ConversationRecord[]>;
+
+  appendMessage(
+    documentId: string,
+    conversationId: string,
+    input: AppendMessageInput,
+  ): Promise<MessageRecord>;
+  listMessages(documentId: string, conversationId: string): Promise<MessageRecord[]>;
+}
+
+export interface CreateConversationInput {
+  anchorBlockId: string | null;
+  selection: { from: number; to: number } | null;
+  selectionText: string;
+  title: string;
+}
+
+export interface AppendMessageInput {
+  role: MessageRole;
+  content: string;
+  provider?: string | null;
+  model?: string | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextDigest?: ContextDigest | null;
+}
+
+export class ConversationNotFoundError extends Error {
+  constructor(readonly conversationId: string) {
+    super(`Conversation ${conversationId} not found`);
+    this.name = 'ConversationNotFoundError';
+  }
 }
