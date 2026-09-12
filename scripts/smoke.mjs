@@ -97,6 +97,18 @@ async function main() {
           { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter One' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'The opening paragraph.' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'The second paragraph.' }] },
+          // Enough body for "what share of the document was sent" to mean
+          // something: on a five-paragraph fixture the structural context is
+          // larger than the document itself, which tests nothing real.
+          ...Array.from({ length: 60 }, (_, index) => ({
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: `Filler paragraph ${index + 1}. It exists so the manuscript has a realistic length, and it says nothing of consequence about the matter under discussion.`,
+              },
+            ],
+          })),
           { type: 'paragraph', content: [{ type: 'text', text: 'A distant paragraph about badgers.' }] },
           { type: 'paragraph', content: [{ type: 'text', text: 'Another distant paragraph about otters.' }] },
         ],
@@ -233,10 +245,16 @@ async function main() {
     context?.totalTokens < context?.budgetTokens,
     `${context?.totalTokens} of ${context?.budgetTokens}`,
   );
+  // The spec's target: an ordinary paragraph-level request sends under 5% of
+  // the document.
   check(
-    'only a fraction of the document was sent',
-    context?.documentPercent > 0 && context?.documentPercent < 100,
+    'well under 5% of the document was sent',
+    context?.documentPercent > 0 && context?.documentPercent < 5,
     `${context?.documentPercent}%`,
+  );
+  check(
+    'filler paragraphs were not sent',
+    !contextText.includes('Filler paragraph 30'),
   );
   check(
     'context not yet available is named rather than faked',
