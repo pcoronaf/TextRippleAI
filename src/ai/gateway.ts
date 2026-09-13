@@ -7,6 +7,7 @@
  * one.
  */
 
+import { credential, credentialOrigin, type CredentialOrigin } from './credentials';
 import { AnthropicProvider } from './providers/anthropic';
 import { MockProvider } from './providers/mock';
 import { OpenAiProvider } from './providers/openai';
@@ -23,7 +24,7 @@ export * from './types';
 export type ProviderName = 'anthropic' | 'openai' | 'mock';
 
 function providerName(): ProviderName {
-  const configured = (process.env.AI_PROVIDER ?? 'mock').toLowerCase();
+  const configured = (credential('AI_PROVIDER') ?? 'mock').toLowerCase();
   if (configured === 'anthropic' || configured === 'openai') return configured;
   return 'mock';
 }
@@ -58,7 +59,7 @@ export async function embed(texts: string[]): Promise<EmbeddingResult> {
   const primary = getProvider();
   if (primary.embed) return primary.embed(texts);
 
-  if (process.env.OPENAI_API_KEY) {
+  if (credential('OPENAI_API_KEY')) {
     const openai = new OpenAiProvider();
     return openai.embed(texts);
   }
@@ -69,10 +70,17 @@ export async function embed(texts: string[]): Promise<EmbeddingResult> {
 /** Configuration report. Makes no network call, so it costs nothing. */
 export function gatewayStatus(): {
   selected: ProviderName;
+  /** Where the selection and each key came from, so the UI can explain itself. */
+  origins: { provider: CredentialOrigin; anthropicApiKey: CredentialOrigin; openaiApiKey: CredentialOrigin };
   providers: ProviderStatus[];
 } {
   return {
     selected: providerName(),
+    origins: {
+      provider: credentialOrigin('AI_PROVIDER'),
+      anthropicApiKey: credentialOrigin('ANTHROPIC_API_KEY'),
+      openaiApiKey: credentialOrigin('OPENAI_API_KEY'),
+    },
     providers: [new AnthropicProvider(), new OpenAiProvider(), new MockProvider()].map((provider) =>
       provider.status(),
     ),

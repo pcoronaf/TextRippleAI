@@ -142,6 +142,20 @@ AI_PROVIDER=openai
 OPENAI_API_KEY=...
 ```
 
+Or set it from the **Settings** tab in the app, which writes `settings.json` beside your documents.
+That is how the packaged `.exe` is configured, since it has no shell to export a variable in.
+
+Two rules make this safe to have alongside a server deployment:
+
+- **An environment variable always wins** over a stored key, so a deployment configured by env
+  cannot be repointed by whatever is on disk — and CI stays on the mock. Set `SETTINGS_READONLY=1`
+  to refuse settings writes altogether.
+- **A key is never read back out.** The API reports *whether* one is stored, not what it is.
+
+The key is written in plain text in your data directory. The alternatives are an OS keychain (a
+native dependency, and the packaged build is deliberately pure JavaScript) or a password on every
+launch; it sits at the same trust level as the documents beside it.
+
 `GET /api/ai/status` reports the configuration **without contacting any provider**, so checking
 costs nothing. Anthropic serves no embedding model, so an Anthropic deployment borrows the OpenAI
 embedding model when a key is present, and otherwise falls back to a deterministic stub.
@@ -243,6 +257,8 @@ POST   /api/documents/:id/suggestions/:sid/resolve   accept | reject | discuss
 POST   /api/ai/ask                        ask or explain a selection
 POST   /api/ai/modify                     propose a rewrite (writes nothing)
 GET    /api/ai/status                     gateway configuration (no provider call)
+GET    /api/settings                      provider and whether a key is stored (never the key)
+POST   /api/settings                      choose a provider or store a key
 ```
 
 ---

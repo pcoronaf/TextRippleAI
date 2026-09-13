@@ -29,6 +29,7 @@ import type { Editor } from '@tiptap/react';
 import type { AskAction } from './AskPanel';
 import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
 import type { CitationGroup } from './ReviewPanel';
+import type { SettingsPanelProps, SettingsReport } from './SettingsPanel';
 
 /** Counted in the browser so the author can see the cost of what they asked for. */
 interface SessionUsage {
@@ -62,6 +63,9 @@ export function Workspace({
   const [impactBusy, setImpactBusy] = useState(false);
   const [impactError, setImpactError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<Record<string, SuggestionRecord>>({});
+
+  const [settings, setSettings] = useState<SettingsReport | null>(null);
+  const [settingsBusy, setSettingsBusy] = useState(false);
 
   const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
   const [conflicts, setConflicts] = useState<DecisionConflict[]>([]);
@@ -131,6 +135,31 @@ export function Workspace({
     ] as string[]);
   }, [record.id, since]);
 
+  const refreshSettings = useCallback(async () => {
+    const response = await fetch('/api/settings');
+    if (!response.ok) return;
+    setSettings(await response.json());
+  }, []);
+
+  // The body carries a key, so it goes out and the fresh report comes back;
+  // nothing about it is kept in component state or logged.
+  const saveSettings = useCallback(
+    async (patch: Parameters<SettingsPanelProps['onSave']>[0]) => {
+      setSettingsBusy(true);
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        if (response.ok) setSettings(await response.json());
+      } finally {
+        setSettingsBusy(false);
+      }
+    },
+    [],
+  );
+
   const refreshDecisions = useCallback(async () => {
     const response = await fetch(`/api/documents/${record.id}/decisions`);
     if (!response.ok) return;
@@ -187,7 +216,8 @@ export function Workspace({
     void refresh();
     void refreshDecisions();
     void refreshReview();
-  }, [refresh, refreshDecisions, refreshReview]);
+    void refreshSettings();
+  }, [refresh, refreshDecisions, refreshReview, refreshSettings]);
 
   const onEditorChange = useCallback(
     (next: DocumentContent) => {
@@ -620,6 +650,11 @@ export function Workspace({
               onSetStatus: (decisionId, status) => void setDecisionStatus(decisionId, status),
               anchorBlockId: selection?.blockId ?? null,
               onSelectBlock: scrollToBlock,
+            }}
+            settings={{
+              report: settings,
+              busy: settingsBusy,
+              onSave: saveSettings,
             }}
             review={{
               comments,

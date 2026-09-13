@@ -1100,6 +1100,40 @@ async function main() {
 
   await api(`/api/documents/${extrasId}`, { method: 'DELETE' });
 
+  console.log('\nSettings');
+  const settingsBefore = await json('/api/settings');
+  check('settings report the selected provider', typeof settingsBefore.selected === 'string');
+  check('settings say where each value came from', typeof settingsBefore.origins?.provider === 'string');
+  check('no key is stored to begin with', settingsBefore.stored?.anthropicApiKey === false);
+
+  const stored = await json('/api/settings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ anthropicApiKey: 'sk-ant-smoke-not-a-real-key' }),
+  });
+  check('storing a key reports it as present', stored.stored?.anthropicApiKey === true);
+  check('the key comes from the settings file', stored.origins?.anthropicApiKey === 'settings');
+  // The one property of this endpoint that really matters.
+  check(
+    'the key itself is never returned',
+    !JSON.stringify(stored).includes('sk-ant-smoke-not-a-real-key'),
+  );
+
+  const badProvider = await api('/api/settings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'definitely-not-a-provider' }),
+  });
+  check('an unknown provider is rejected', badProvider.status === 400);
+
+  const cleared = await json('/api/settings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ anthropicApiKey: null }),
+  });
+  check('a key can be removed again', cleared.stored?.anthropicApiKey === false);
+  check('the gateway is still on the mock provider', cleared.selected === 'mock');
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

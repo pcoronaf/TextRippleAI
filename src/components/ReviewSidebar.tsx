@@ -11,6 +11,7 @@ import { DecisionsPanel, type DecisionsPanelProps } from './DecisionsPanel';
 import { ImpactPanel, type ImpactPanelProps } from './ImpactPanel';
 import { IndexPanel, type IndexPanelProps } from './IndexPanel';
 import { ReviewPanel, type ReviewPanelProps } from './ReviewPanel';
+import { SettingsPanel, type SettingsPanelProps } from './SettingsPanel';
 
 export type SidebarTab =
   | 'changes'
@@ -19,7 +20,8 @@ export type SidebarTab =
   | 'index'
   | 'impact'
   | 'decisions'
-  | 'review';
+  | 'review'
+  | 'settings';
 
 export interface ReviewSidebarProps {
   changes: ChangeRecord[];
@@ -40,6 +42,7 @@ export interface ReviewSidebarProps {
   impact: ImpactPanelProps;
   decisions: DecisionsPanelProps;
   review: ReviewPanelProps;
+  settings: SettingsPanelProps;
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -64,6 +67,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
             ['impact', 'Impact'],
             ['decisions', 'Decisions'],
             ['review', 'Review'],
+            ['settings', 'Settings'],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -84,6 +88,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
       {tab === 'impact' && <ImpactPanel {...props.impact} />}
       {tab === 'decisions' && <DecisionsPanel {...props.decisions} />}
       {tab === 'review' && <ReviewPanel {...props.review} />}
+      {tab === 'settings' && <SettingsPanel {...props.settings} />}
     </>
   );
 }

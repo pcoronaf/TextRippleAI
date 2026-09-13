@@ -1,3 +1,4 @@
+import { credential } from '../credentials';
 import type {
   AiProvider,
   CompletionRequest,
@@ -15,13 +16,17 @@ import type {
 export class AnthropicProvider implements AiProvider {
   readonly name = 'anthropic';
 
-  private readonly models: Record<ModelTier, string> = {
-    fast: process.env.ANTHROPIC_FAST_MODEL ?? 'claude-haiku-4-5',
-    reasoning: process.env.ANTHROPIC_REASONING_MODEL ?? 'claude-opus-5',
-  };
+  // Read per call rather than captured at construction: the key and the model
+  // can be changed from the settings panel while the server is running.
+  private get models(): Record<ModelTier, string> {
+    return {
+      fast: credential('ANTHROPIC_FAST_MODEL') ?? 'claude-haiku-4-5',
+      reasoning: credential('ANTHROPIC_REASONING_MODEL') ?? 'claude-opus-5',
+    };
+  }
 
   status(): ProviderStatus {
-    const configured = Boolean(process.env.ANTHROPIC_API_KEY);
+    const configured = Boolean(credential('ANTHROPIC_API_KEY'));
     return {
       provider: this.name,
       configured,
@@ -33,7 +38,7 @@ export class AnthropicProvider implements AiProvider {
 
   async complete(request: CompletionRequest): Promise<CompletionResult> {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const client = new Anthropic();
+    const client = new Anthropic({ apiKey: credential('ANTHROPIC_API_KEY') });
     const model = this.models[request.tier ?? 'fast'];
 
     const response = await client.messages.create({

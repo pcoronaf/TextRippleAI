@@ -14,6 +14,15 @@ import {
   CommentNotFoundError,
 } from '@/store';
 
+import { installCredentialSource } from './settings';
+
+/**
+ * Every API route imports this module, so installing the credential source
+ * here means the gateway can see stored settings wherever a request can reach
+ * it, without each route having to remember to do it.
+ */
+installCredentialSource();
+
 /**
  * Authentication arrives with the OIDC provider in a later milestone. Until
  * then every change is attributed to the single local author, so the ledger's

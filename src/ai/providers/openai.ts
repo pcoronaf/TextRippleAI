@@ -1,3 +1,4 @@
+import { credential } from '../credentials';
 import type {
   AiProvider,
   CompletionRequest,
@@ -10,16 +11,21 @@ import type {
 export class OpenAiProvider implements AiProvider {
   readonly name = 'openai';
 
-  private readonly models: Record<ModelTier, string> = {
-    fast: process.env.OPENAI_FAST_MODEL ?? 'gpt-4.1-mini',
-    reasoning: process.env.OPENAI_REASONING_MODEL ?? 'gpt-4.1',
-  };
+  // Read per call rather than captured at construction: the key and the models
+  // can be changed from the settings panel while the server is running.
+  private get models(): Record<ModelTier, string> {
+    return {
+      fast: credential('OPENAI_FAST_MODEL') ?? 'gpt-4.1-mini',
+      reasoning: credential('OPENAI_REASONING_MODEL') ?? 'gpt-4.1',
+    };
+  }
 
-  private readonly embeddingModel =
-    process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
+  private get embeddingModel(): string {
+    return credential('OPENAI_EMBEDDING_MODEL') ?? 'text-embedding-3-small';
+  }
 
   status(): ProviderStatus {
-    const configured = Boolean(process.env.OPENAI_API_KEY);
+    const configured = Boolean(credential('OPENAI_API_KEY'));
     return {
       provider: this.name,
       configured,
@@ -31,7 +37,7 @@ export class OpenAiProvider implements AiProvider {
 
   async complete(request: CompletionRequest): Promise<CompletionResult> {
     const { default: OpenAI } = await import('openai');
-    const client = new OpenAI();
+    const client = new OpenAI({ apiKey: credential('OPENAI_API_KEY') });
     const model = this.models[request.tier ?? 'fast'];
 
     const response = await client.chat.completions.create({
@@ -59,7 +65,7 @@ export class OpenAiProvider implements AiProvider {
 
   async embed(texts: string[]): Promise<EmbeddingResult> {
     const { default: OpenAI } = await import('openai');
-    const client = new OpenAI();
+    const client = new OpenAI({ apiKey: credential('OPENAI_API_KEY') });
 
     const response = await client.embeddings.create({
       model: this.embeddingModel,
