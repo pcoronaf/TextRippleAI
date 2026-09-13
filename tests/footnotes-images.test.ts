@@ -112,7 +112,12 @@ describe('footnotes and images through HTML', () => {
 
   it('drops an image with no source rather than emitting an empty node', () => {
     const content = htmlToContent('<p><img alt="orphan"></p>');
-    expect(content.content[0].content?.some((node) => node.type === 'image')).toBe(false);
+    const paragraph = content.content[0];
+
+    expect(paragraph.type).toBe('paragraph');
+    // Nothing survived, so the paragraph carries no content key at all - which is
+    // what ProseMirror's canonical JSON uses for an empty paragraph.
+    expect(paragraph.content ?? []).toEqual([]);
   });
 });
 
