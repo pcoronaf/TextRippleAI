@@ -10,6 +10,7 @@ import type {
   ChangeRecord,
   ChangesSinceSummary,
   CheckpointRecord,
+  CommentRecord,
   DocumentContent,
   DocumentRecord,
   ImpactAnalysisRecord,
@@ -27,6 +28,7 @@ import { EditorPane, type EditorSelection } from './EditorPane';
 import type { Editor } from '@tiptap/react';
 import type { AskAction } from './AskPanel';
 import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
+import type { CitationGroup } from './ReviewPanel';
 
 /** Counted in the browser so the author can see the cost of what they asked for. */
 interface SessionUsage {
@@ -66,6 +68,13 @@ export function Workspace({
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionQuery, setDecisionQuery] = useState('');
 
+  const [comments, setComments] = useState<CommentRecord[]>([]);
+  const [citations, setCitations] = useState<CitationGroup[]>([]);
+  const [changedBlockIds, setChangedBlockIds] = useState<string[]>([]);
+  const [since, setSince] = useState<string | null>(null);
+  const [showChanges, setShowChanges] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
+
   const [indexStatus, setIndexStatus] = useState<IndexStatusReport | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,6 +101,35 @@ export function Workspace({
     );
     setIndexStatus(status);
   }, [hideTrivial, record.id, scope]);
+
+  /**
+   * Comments, citations and the set of changed blocks.
+   *
+   * All three read from the same review boundary, and none of them reaches a
+   * model: the marks come from the ledger, the citations from what the index
+   * already extracted, and a comment is a note between people.
+   */
+  const refreshReview = useCallback(async () => {
+    const query = since ? `?since=${encodeURIComponent(since)}` : '';
+
+    const [commentBody, citationBody, ledger] = await Promise.all([
+      fetch(`/api/documents/${record.id}/comments`).then((response) =>
+        response.ok ? response.json() : { comments: [] },
+      ),
+      fetch(`/api/documents/${record.id}/citations${query}`).then((response) =>
+        response.ok ? response.json() : { citations: [] },
+      ),
+      fetch(`/api/documents/${record.id}/changes${query}`).then((response) =>
+        response.ok ? response.json() : { changes: [] },
+      ),
+    ]);
+
+    setComments(commentBody.comments ?? []);
+    setCitations(citationBody.citations ?? []);
+    setChangedBlockIds([
+      ...new Set((ledger.changes ?? []).map((change: ChangeRecord) => change.blockId)),
+    ] as string[]);
+  }, [record.id, since]);
 
   const refreshDecisions = useCallback(async () => {
     const response = await fetch(`/api/documents/${record.id}/decisions`);
@@ -148,7 +186,8 @@ export function Workspace({
   useEffect(() => {
     void refresh();
     void refreshDecisions();
-  }, [refresh, refreshDecisions]);
+    void refreshReview();
+  }, [refresh, refreshDecisions, refreshReview]);
 
   const onEditorChange = useCallback(
     (next: DocumentContent) => {
@@ -424,6 +463,40 @@ export function Workspace({
     [createDecision, resolveImpact],
   );
 
+  const addComment = useCallback(
+    async (blockId: string, body: string) => {
+      setReviewBusy(true);
+      try {
+        const response = await fetch(`/api/documents/${record.id}/comments`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ blockId, body }),
+        });
+        if (response.ok) await refreshReview();
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [record.id, refreshReview],
+  );
+
+  const resolveComment = useCallback(
+    async (commentId: string, status: CommentRecord['status']) => {
+      setReviewBusy(true);
+      try {
+        const response = await fetch(`/api/documents/${record.id}/comments/${commentId}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status }),
+        });
+        if (response.ok) await refreshReview();
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [record.id, refreshReview],
+  );
+
   const outline = useMemo(() => buildOutline(content), [content]);
 
 
@@ -476,6 +549,7 @@ export function Workspace({
             onBlur={() => void flushAndSave()}
             onSelectionChange={setSelection}
             onAskAction={onAskAction}
+            changedBlockIds={showChanges ? changedBlockIds : []}
             onEditorReady={(instance) => {
               editorRef.current = instance;
             }}
@@ -545,6 +619,21 @@ export function Workspace({
               onCreate: (input) => void createDecision(input),
               onSetStatus: (decisionId, status) => void setDecisionStatus(decisionId, status),
               anchorBlockId: selection?.blockId ?? null,
+              onSelectBlock: scrollToBlock,
+            }}
+            review={{
+              comments,
+              citations,
+              checkpoints,
+              since,
+              onSinceChange: setSince,
+              showChanges,
+              onShowChangesChange: setShowChanges,
+              changedCount: changedBlockIds.length,
+              anchorBlockId: selection?.blockId ?? null,
+              busy: reviewBusy,
+              onComment: (blockId, body) => void addComment(blockId, body),
+              onResolveComment: (commentId, status) => void resolveComment(commentId, status),
               onSelectBlock: scrollToBlock,
             }}
           />

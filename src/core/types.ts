@@ -563,3 +563,29 @@ export interface DecisionRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+// --------------------------------------------------------------------------
+// Comments (M8)
+// --------------------------------------------------------------------------
+
+export type CommentStatus = 'open' | 'resolved';
+
+/**
+ * A review remark anchored to a block.
+ *
+ * Deliberately inert: a comment is a note between people. Nothing reads it to
+ * decide anything, and it never reaches a model unless someone asks a question
+ * that happens to include it.
+ */
+export interface CommentRecord {
+  id: string;
+  documentId: string;
+  blockId: string;
+  body: string;
+  authorId: string;
+  status: CommentStatus;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

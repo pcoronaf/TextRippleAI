@@ -21,6 +21,7 @@ export const ID_NODE_TYPES = new Set([
   'tableHeader',
   'image',
   'horizontalRule',
+  'footnote',
 ]);
 
 /**
@@ -28,13 +29,32 @@ export const ID_NODE_TYPES = new Set([
  * Aggregator compares; container nodes (lists, tables, cells) delegate their
  * text to the paragraphs nested inside them.
  */
-export const TEXT_BLOCK_TYPES = new Set(['paragraph', 'heading', 'codeBlock']);
+export const TEXT_BLOCK_TYPES = new Set(['paragraph', 'heading', 'codeBlock', 'footnote']);
 
-/** Concatenated plain text of a node and its descendants. */
+/**
+ * Nodes whose text belongs to them, not to the paragraph that carries them.
+ *
+ * A footnote sits inside a paragraph but is not part of its prose. Folding its
+ * text into the paragraph would corrupt every diff, embedding and summary the
+ * paragraph takes part in - so it is skipped here and flattened as a block of
+ * its own, with its own identity and its own ledger entries.
+ */
+const DETACHED_TEXT_TYPES = new Set(['footnote']);
+
+/** Concatenated plain text of a node, excluding any detached subtree. */
 export function nodeText(node: ContentNode): string {
   if (typeof node.text === 'string') return node.text;
   if (!node.content) return '';
-  return node.content.map(nodeText).join('');
+  return node.content
+    .filter((child) => !DETACHED_TEXT_TYPES.has(child.type))
+    .map(nodeText)
+    .join('');
+}
+
+/** Text of a node including detached subtrees - what a footnote itself says. */
+export function ownText(node: ContentNode): string {
+  if (typeof node.text === 'string') return node.text;
+  return (node.content ?? []).map(ownText).join('');
 }
 
 function clone<T>(value: T): T {
@@ -97,7 +117,9 @@ export function flattenBlocks(content: DocumentContent): FlatBlock[] {
       blocks.push({
         id,
         type: node.type,
-        text: nodeText(node),
+        // A footnote's own text is its content; every other block's text
+        // excludes whatever footnotes it carries.
+        text: node.type === 'footnote' ? ownText(node) : nodeText(node),
         position: blocks.length,
         parentId,
         attrs: { ...(node.attrs ?? {}) },

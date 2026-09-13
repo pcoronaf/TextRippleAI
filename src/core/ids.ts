@@ -65,3 +65,4 @@ export const newSemanticUnitId = () => newId('unit');
 export const newImpactAnalysisId = () => newId('ia');
 export const newImpactId = () => newId('imp');
 export const newDecisionId = () => newId('dec');
+export const newCommentId = () => newId('cmt');

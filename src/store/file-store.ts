@@ -23,6 +23,7 @@ import { contentHash } from '@/core/hash';
 import {
   newChangeId,
   newCheckpointId,
+  newCommentId,
   newConversationId,
   newDecisionId,
   newDocumentId,
@@ -38,6 +39,8 @@ import { classifyChange, isTrivial } from '@/core/classify';
 import type {
   ChangeRecord,
   CheckpointRecord,
+  CommentRecord,
+  CommentStatus,
   ConversationRecord,
   DecisionRecord,
   DecisionStatus,
@@ -69,6 +72,7 @@ import {
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
   DecisionNotFoundError,
+  CommentNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
@@ -114,6 +118,7 @@ interface DocumentFile {
   impactAnalyses?: ImpactAnalysisRecord[];
   impacts?: ImpactRecord[];
   decisions?: DecisionRecord[];
+  comments?: CommentRecord[];
 }
 
 /**
@@ -1087,6 +1092,79 @@ export class FileStore implements Store {
     });
   }
 
+  // ---- Comments -----------------------------------------------------------
+
+  async createComment(
+    documentId: string,
+    input: { blockId: string; body: string; authorId: string },
+  ): Promise<CommentRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      const comment: CommentRecord = {
+        id: newCommentId(),
+        documentId,
+        blockId: input.blockId,
+        body: input.body,
+        authorId: input.authorId,
+        status: 'open',
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await this.write({ ...data, comments: [...(data.comments ?? []), comment] });
+      return comment;
+    });
+  }
+
+  async listComments(
+    documentId: string,
+    options: { blockId?: string; statuses?: CommentStatus[] } = {},
+  ): Promise<CommentRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.comments ?? [])
+      .filter((entry) => !options.blockId || entry.blockId === options.blockId)
+      .filter((entry) => !options.statuses || options.statuses.includes(entry.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async setCommentStatus(
+    documentId: string,
+    commentId: string,
+    input: { status: CommentStatus; resolvedBy: string },
+  ): Promise<CommentRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const comments = data.comments ?? [];
+      const existing = comments.find((entry) => entry.id === commentId);
+      if (!existing) throw new CommentNotFoundError(commentId);
+
+      const now = new Date().toISOString();
+      const updated: CommentRecord = {
+        ...existing,
+        status: input.status,
+        resolvedBy: input.status === 'resolved' ? input.resolvedBy : null,
+        resolvedAt: input.status === 'resolved' ? now : null,
+        updatedAt: now,
+      };
+
+      await this.write({
+        ...data,
+        comments: comments.map((entry) => (entry.id === commentId ? updated : entry)),
+      });
+
+      return updated;
+    });
+  }
+
   // ---- Decisions ----------------------------------------------------------
 
   async createDecision(
@@ -1201,6 +1279,7 @@ export interface StoredImpactData {
   impactAnalyses?: ImpactAnalysisRecord[];
   impacts?: ImpactRecord[];
   decisions?: DecisionRecord[];
+  comments?: CommentRecord[];
 }
 
 /** Which summaries a document ought to have, by type. */

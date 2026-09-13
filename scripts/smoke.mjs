@@ -990,6 +990,116 @@ async function main() {
     !reAnalysed.impacts?.some((impact) => impact.targetBlockId === settle.targetBlockId),
   );
 
+  console.log('\nComments');
+  const revisionBeforeComment = await revisionOf();
+
+  const comment = await json(`/api/documents/${id}/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ blockId: blockIds[1], body: 'Is this too strong?' }),
+  });
+  check('a comment can be left on a passage', comment.comment?.status === 'open');
+  check('it is anchored to the block', comment.comment?.blockId === blockIds[1]);
+  check('commenting does not touch the document', (await revisionOf()) === revisionBeforeComment);
+
+  const resolvedComment = await json(
+    `/api/documents/${id}/comments/${comment.comment.id}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'resolved' }),
+    },
+  );
+  check('a comment can be resolved', resolvedComment.comment?.status === 'resolved');
+
+  const openOnly = await json(`/api/documents/${id}/comments?status=open`);
+  check('resolved comments drop out of the open list', openOnly.comments?.length === 0);
+  const allComments = await json(`/api/documents/${id}/comments`);
+  check('but are kept, not deleted', allComments.comments?.length === 1);
+
+  const badComment = await api(`/api/documents/${id}/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ blockId: blockIds[1] }),
+  });
+  check('an empty comment is rejected', badComment.status === 400);
+
+  console.log('\nCitations');
+  const citations = await json(`/api/documents/${id}/citations`);
+  check('extracted citations are grouped', (citations.citations?.length ?? 0) > 0);
+  check(
+    'each records where it is used',
+    citations.citations?.every((entry) => entry.blockIds.length > 0),
+  );
+  check(
+    'and whether a citing passage has changed',
+    citations.citations?.every((entry) => Array.isArray(entry.changedBlockIds)),
+  );
+
+  console.log('\nFootnotes and images survive a round trip');
+  const withExtras = await json('/api/documents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Extras',
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'Oversight is required.' },
+              { type: 'footnote', content: [{ type: 'text', text: 'See ISO/IEC 42001.' }] },
+              { type: 'image', attrs: { src: 'https://example.org/figure.png', alt: 'Figure 1' } },
+            ],
+          },
+        ],
+      },
+    }),
+  });
+
+  const extrasId = withExtras.document.id;
+  const extraBlocks = withExtras.content.content[0].content ?? [];
+  check(
+    'a footnote survives as a node, not as inline prose',
+    extraBlocks.some((node) => node.type === 'footnote'),
+  );
+  check(
+    'an image keeps its source',
+    extraBlocks.find((node) => node.type === 'image')?.attrs?.src ===
+      'https://example.org/figure.png',
+  );
+
+  const reloaded = await json(`/api/documents/${extrasId}`);
+  const paragraph = reloaded.content.content[0];
+  check(
+    'the footnote has its own persistent id',
+    typeof paragraph.content?.find((node) => node.type === 'footnote')?.attrs?.id === 'string',
+  );
+
+  const extrasMarkdown = await (
+    await api(`/api/documents/${extrasId}/export?format=md`)
+  ).text();
+  check('markdown export carries the footnote', extrasMarkdown.includes('^[See ISO/IEC 42001.]'));
+  check('markdown export carries the image', extrasMarkdown.includes('![Figure 1]'));
+
+  const extrasDocx = await api(`/api/documents/${extrasId}/export?format=docx`);
+  const extrasBytes = new Uint8Array(await extrasDocx.arrayBuffer());
+  check(
+    'DOCX export with a footnote still produces a valid container',
+    extrasBytes[0] === 0x50 && extrasBytes[1] === 0x4b && extrasBytes.length > 1000,
+    `${extrasBytes.length} bytes`,
+  );
+
+  const extrasText = await (await api(`/api/documents/${extrasId}/export?format=txt`)).text();
+  check(
+    'the footnote is not folded into the paragraph prose',
+    extrasText.includes('Oversight is required.') &&
+      !extrasText.split('\n')[0].includes('ISO/IEC 42001'),
+  );
+
+  await api(`/api/documents/${extrasId}`, { method: 'DELETE' });
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

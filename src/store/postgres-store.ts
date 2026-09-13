@@ -15,6 +15,7 @@ import { contentHash } from '@/core/hash';
 import {
   newChangeId,
   newCheckpointId,
+  newCommentId,
   newConversationId,
   newDecisionId,
   newDocumentId,
@@ -32,6 +33,8 @@ import type {
   ChangeRecord,
   ChangeSource,
   CheckpointRecord,
+  CommentRecord,
+  CommentStatus,
   DocumentContent,
   DocumentNodeRecord,
   DocumentRecord,
@@ -75,6 +78,7 @@ import {
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
   DecisionNotFoundError,
+  CommentNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
@@ -1338,6 +1342,61 @@ export class PostgresStore implements Store {
     return toImpact(rows[0]);
   }
 
+  // ---- Comments -----------------------------------------------------------
+
+  async createComment(
+    documentId: string,
+    input: { blockId: string; body: string; authorId: string },
+  ): Promise<CommentRecord> {
+    const rows = await this.query(
+      `insert into comments (id, document_id, block_id, body, author_id)
+       values ($1, $2, $3, $4, $5)
+       returning *`,
+      [newCommentId(), documentId, input.blockId, input.body, input.authorId],
+    );
+    return toComment(rows[0]);
+  }
+
+  async listComments(
+    documentId: string,
+    options: { blockId?: string; statuses?: CommentStatus[] } = {},
+  ): Promise<CommentRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from comments where document_id = $1';
+
+    if (options.blockId) {
+      values.push(options.blockId);
+      sql += ` and block_id = $${values.length}`;
+    }
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+    sql += ' order by created_at asc';
+
+    return (await this.query(sql, values)).map(toComment);
+  }
+
+  async setCommentStatus(
+    documentId: string,
+    commentId: string,
+    input: { status: CommentStatus; resolvedBy: string },
+  ): Promise<CommentRecord> {
+    const resolved = input.status === 'resolved';
+    const rows = await this.query(
+      `update comments
+          set status      = $3,
+              resolved_by = case when $4::boolean then $5 else null end,
+              resolved_at = case when $4::boolean then now() else null end,
+              updated_at  = now()
+        where document_id = $1 and id = $2
+        returning *`,
+      [documentId, commentId, input.status, resolved, input.resolvedBy],
+    );
+    if (rows.length === 0) throw new CommentNotFoundError(commentId);
+    return toComment(rows[0]);
+  }
+
   // ---- Decisions ----------------------------------------------------------
 
   async createDecision(documentId: string, input: CreateDecisionInput): Promise<DecisionRecord> {
@@ -1533,6 +1592,21 @@ function toImpact(row: Row): ImpactRecord {
     resolvedBy: row.resolved_by,
     resolvedAt: row.resolved_at ? toIso(row.resolved_at) : null,
     createdAt: toIso(row.created_at),
+  };
+}
+
+function toComment(row: Row): CommentRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    blockId: row.block_id,
+    body: row.body,
+    authorId: row.author_id,
+    status: row.status as CommentStatus,
+    resolvedBy: row.resolved_by,
+    resolvedAt: row.resolved_at ? toIso(row.resolved_at) : null,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 

@@ -39,6 +39,20 @@ function inlineToMarkdown(nodes: ContentNode[]): string {
   return nodes
     .map((node) => {
       if (node.type === 'hardBreak') return '  \n';
+
+      if (node.type === 'image') {
+        const src = typeof node.attrs?.src === 'string' ? node.attrs.src : '';
+        const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : '';
+        return src ? `![${alt}](${src})` : '';
+      }
+
+      if (node.type === 'footnote') {
+        // Inline rather than a numbered reference: the note travels with the
+        // sentence, which is where the change model keeps it.
+        const text = (node.content ?? []).map((child) => child.text ?? '').join('');
+        return `^[${text}]`;
+      }
+
       if (typeof node.text !== 'string') return '';
 
       let text = escapeMarkdown(node.text);

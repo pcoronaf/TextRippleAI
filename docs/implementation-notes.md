@@ -623,3 +623,150 @@ choice has moved on, which is the whole point of writing it down.
   them and lean on the token budget to trim.
 - **A decision cannot yet be created directly from a conversation turn.** The source exists and the
   API accepts it; the Ask panel has no button for it.
+
+---
+
+# M8 — Advanced document capabilities
+
+M8 in the spec is a menu of "possible features", not an ordered checklist, and several of its
+entries are listed among the initial non-goals. The subset built here is the one that closes debt
+the earlier milestones incurred: things the change model already implied but the document model
+could not yet carry.
+
+Built: footnotes, images, comments, track-change marks, citation review.
+Not built: real-time collaboration, desktop packaging, local model inference, PDF import, a plugin
+ecosystem. Those are non-goals, not omissions — see the end of this section.
+
+## Decisions
+
+### A footnote is a block, not part of the paragraph's prose
+
+The obvious implementation makes a footnote an inline node whose text is part of the paragraph. It
+is wrong here, and expensively so. `nodeText()` feeds the diff, the content hash, the classifier,
+the embedding and every summary. Folding a note into its paragraph means changing a citation in a
+note rewrites the paragraph's hash, produces a change whose before/after are dominated by text the
+author never touched, and poisons the paragraph's embedding with bibliographic noise.
+
+So the model splits two operations that used to be one:
+
+- `nodeText(node)` — what the paragraph *says*, with detached-text children (currently footnotes)
+  excluded. This is what the change model, the index and the AI context all use.
+- `ownText(node)` — everything under the node including notes. Used only where the literal
+  serialisation matters.
+
+A footnote carries its own persistent ID, appears in `flattenBlocks` as its own block, and so gets
+its own ledger entries, its own embedding and its own place in impact analysis. Editing a note is a
+tracked change against the note. A footnote can be the target of a finding — which is right: an
+outdated citation in a note is exactly the kind of consequence this product exists to catch.
+
+The cost is that `flattenBlocks` no longer returns blocks in a single containment order — a footnote
+appears after the paragraph that carries it, though it lives inside it. Nothing downstream depends
+on containment, only on order, so this is safe today and is written down because it will not be
+obvious later.
+
+### Word's footnotes arrive as a list at the end of the document
+
+`mammoth` lowers footnotes to what HTML can express: a superscript link in the paragraph, and an
+ordered list of definitions at the end of the body. Taken literally that produces a trailing list
+of orphaned paragraphs with no relationship to the text that cites them.
+
+`htmlToContent` therefore does a collection pass before walking the tree: it reads every
+`<li id="footnote-N">` into a map, then converts each `<sup><a href="#footnote-N">` into a footnote
+node holding that text, and suppresses the definition list itself. The suppression is narrow — a
+list is only dropped when every item it holds was consumed as a footnote definition, so an ordinary
+numbered list in a document that also has footnotes survives.
+
+The map is module-scoped and cleared at the start of each `htmlToContent` call. `htmlToContent` is
+synchronous and single-threaded, so this is safe; it is state that would not survive a move to a
+streaming parser, and it is the one place in `src/formats` that is not a pure function of its
+argument.
+
+### Images keep their source; Word gets alt text
+
+Before M8 an image survived import as alt text and nothing else, which silently destroyed content.
+Images are now `image` nodes carrying `src`, `alt` and `title`, round-trip through HTML, Markdown
+and canonical JSON, and render in the editor.
+
+DOCX export still writes alt text. Embedding an image in a `.docx` means decoding the data URI,
+sizing it, and managing relationship parts — real work whose absence is visible and recoverable (the
+alt text says what was there) rather than silent. An image with no `src` is dropped rather than
+emitted as an empty node, because an image node with nothing in it is worse than no node.
+
+Images are inline data URIs in the document JSON. That is fine for diagrams and wrong for a
+photograph-heavy manuscript; object storage is the eventual answer and is not here.
+
+### Comments never reach a model
+
+A comment is anchored to a block ID, has a body, a status and a resolver. It is stored beside the
+document, not inside it: creating one does not change the content, does not bump the revision and
+writes no ledger entry. A remark about the text is not a change to the text.
+
+Comments are also deliberately excluded from the Context Builder. A reviewer's aside — "is this too
+strong?" — is not authorial intent, and feeding it to a model would blur the line M7 drew between a
+recorded decision and a passing remark. If a comment should bind the system's behaviour, the author
+promotes it to a decision, which is an explicit act.
+
+Resolving sets a status and a resolver; reopening clears the resolution rather than leaving a stale
+`resolvedAt` behind. Nothing is deleted, consistent with everything else here.
+
+### Track-change marks come from the ledger, not from a text diff
+
+The visual "what changed since this checkpoint" could be computed by diffing the current content
+against the checkpoint snapshot. It is not. The ledger already knows which blocks changed, why, and
+how they were classified — a text diff would re-derive a worse version of that, disagree with the
+change list in the sidebar whenever the two drifted, and lose the classification that lets
+typographical noise be filtered out.
+
+So the decoration plugin takes a set of block IDs from `GET /api/documents/:id/changes?since=…` and
+marks those nodes. The marks survive editing because ProseMirror maps decorations through each
+transaction rather than recomputing them. The consequence is that the granularity is the block: the
+editor shows *that* a paragraph changed, not which words moved. Intra-paragraph insert/delete runs
+in the Word sense are a larger piece of work and are not here.
+
+### Citation review is a view over the index, not a new subsystem
+
+M4 already extracts citations per block. M8 groups them by source, shows where each is used, and
+flags those whose citing passage has changed since the review boundary — the same `since` that
+drives the change list and the track-change marks. One review boundary, three views of it, which is
+why comments, citations and the change marks share a single panel rather than three.
+
+This is citation *review*, not citation *management*: there is no bibliographic database, no style
+formatting, no DOI resolution. It answers "which of my sources are cited by text I have since
+rewritten", which is the question this product is uniquely placed to answer.
+
+## Deviations from the spec
+
+| Spec | Here | Why |
+|---|---|---|
+| "Comment threads" | Single remarks with a status | Threading is a UI affordance over the same record; the anchoring and the resolve/reopen lifecycle are the parts the change model has to get right. Replies can be added without a schema change beyond a parent ID. |
+| "Track changes visualisation" | Block-level marks from the ledger | Word-style insert/delete runs need intra-block diff storage that the ledger does not keep. Marking the block is honest about what is known. |
+| "Citation management" | Citation review | Managing citations is a bibliography product. Detecting that a cited passage drifted is the change-aware half, and the half nothing else does. |
+| "Image support" | Inline in the document, alt text in DOCX | See above. |
+
+## Known limitations
+
+- **Footnote position is not preserved on DOCX export** beyond order: a note attaches to the end of
+  the paragraph that carried it, not to the exact character offset of its reference.
+- **Images do not survive a DOCX round trip.** Import keeps them; export writes alt text.
+- **Comments are not anchored to a range**, only to a block. A remark about one sentence in a long
+  paragraph is shown against the whole paragraph.
+- **A comment's anchor can be orphaned.** If the block it points at is deleted, the comment remains
+  and lists as anchored to a block that is no longer in the document. It is kept rather than
+  removed, consistent with the rest of the system, but nothing yet surfaces that state.
+- **Track-change marks do not distinguish an insertion from a deletion**, and a block that was
+  deleted entirely has nothing left to decorate — it appears in the change list only.
+- **Citation grouping is by normalised text**, so "ISO/IEC 42001:2023" and "ISO 42001" are two
+  sources. Identity resolution needs a bibliographic database, which is a non-goal.
+
+## Deliberately not built
+
+These are spec items that were considered and rejected for this milestone, most because the spec
+itself lists them as initial non-goals:
+
+- **Real-time collaboration (Yjs/CRDT).** It is not an additional feature; it changes the
+  concurrency model the whole store rests on. Optimistic concurrency with `expectedRevision` and a
+  CRDT are two different products, and the change ledger's "who changed what, when, in which
+  session" is the harder question under multiplayer.
+- **Desktop packaging**, **local model inference**, **PDF import/OCR**, and a **plugin ecosystem**.
+  All listed as non-goals; none of them exercise the change model, which is what these milestones
+  exist to prove.

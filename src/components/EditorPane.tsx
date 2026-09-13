@@ -6,11 +6,14 @@ import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import TableRow from '@tiptap/extension-table-row';
 import Underline from '@tiptap/extension-underline';
+import Image from '@tiptap/extension-image';
 import { BubbleMenu, EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect } from 'react';
 
 import { TEXT_BLOCK_TYPES } from '@/core/document';
+import { ChangedSince, changedSinceKey } from '@/editor/extensions/changed-since';
+import { Footnote } from '@/editor/extensions/footnote';
 import { PersistentId } from '@/editor/extensions/persistent-id';
 import type { DocumentContent } from '@/core/types';
 
@@ -29,6 +32,8 @@ export interface EditorPaneProps {
   onSelectionChange?: (selection: EditorSelection) => void;
   /** Raised by the floating toolbar. The selection is already reported. */
   onAskAction?: (action: 'ask' | 'explain' | 'modify') => void;
+  /** Blocks changed since the chosen review boundary, marked in the margin. */
+  changedBlockIds?: string[];
   /** Handed the editor once it exists, so an accepted proposal can be applied. */
   onEditorReady?: (editor: Editor) => void;
 }
@@ -68,6 +73,7 @@ export function EditorPane({
   onBlur,
   onSelectionChange,
   onAskAction,
+  changedBlockIds,
   onEditorReady,
 }: EditorPaneProps) {
   const editor = useEditor({
@@ -81,6 +87,9 @@ export function EditorPane({
       TableRow,
       TableHeader,
       TableCell,
+      Image.configure({ inline: true, allowBase64: true }),
+      Footnote,
+      ChangedSince,
       PersistentId,
     ],
     content: initialContent,
@@ -99,6 +108,15 @@ export function EditorPane({
   useEffect(() => {
     if (editor) onEditorReady?.(editor);
   }, [editor, onEditorReady]);
+
+  // Decorations only: turning the marks on and off never touches the document,
+  // so the Change Aggregator sees nothing.
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dispatch(
+      editor.state.tr.setMeta(changedSinceKey, { blockIds: changedBlockIds ?? [] }),
+    );
+  }, [changedBlockIds, editor]);
 
   return (
     <div className="editor-scroll">

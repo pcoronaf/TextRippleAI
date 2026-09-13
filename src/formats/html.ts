@@ -47,6 +47,47 @@ function decodeEntities(text: string): string {
 const isElement = (node: ParsedNode): node is HTMLElement =>
   (node as HTMLElement).tagName !== undefined && (node as HTMLElement).tagName !== null;
 
+/**
+ * Footnote definitions, keyed by the anchor their references point at.
+ *
+ * Word (via mammoth) emits footnotes as a list at the end of the document with
+ * superscript links into it. Reading them into the reference itself keeps the
+ * note attached to the sentence it belongs to, which is where it has to be for
+ * the change model to treat it as that paragraph's footnote.
+ *
+ * Module-scoped for the duration of one parse; `htmlToContent` sets and clears
+ * it, and nothing here is concurrent.
+ */
+let footnoteTexts = new Map<string, string>();
+
+function collectFootnotes(root: HTMLElement): Map<string, string> {
+  const collected = new Map<string, string>();
+
+  for (const item of root.querySelectorAll('li')) {
+    const id = item.getAttribute('id');
+    if (!id || !/^footnote/i.test(id)) continue;
+
+    // Drop the back-link Word adds to each note.
+    const text = decodeEntities(item.text ?? item.rawText ?? '')
+      .replace(/↑|↵/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (text) collected.set(id, text);
+  }
+
+  return collected;
+}
+
+/** The list element holding footnote definitions, which must not be re-emitted. */
+function isFootnoteList(element: HTMLElement): boolean {
+  const items = element.querySelectorAll('li');
+  return (
+    items.length > 0 &&
+    items.every((item) => /^footnote/i.test(item.getAttribute('id') ?? ''))
+  );
+}
+
 const tagOf = (element: HTMLElement): string => element.tagName.toLowerCase();
 
 /** Collect inline content, accumulating marks down the tree. */
@@ -61,10 +102,25 @@ function inlineContent(node: ParsedNode, marks: Mark[] = []): ContentNode[] {
 
   if (tag === 'br') return [{ type: 'hardBreak' }];
   if (tag === 'img') {
-    const alt = node.getAttribute('alt');
-    // Images are not part of the M0 baseline; keep the alt text so no prose
-    // is lost on a round trip.
-    return alt ? [{ type: 'text', text: alt }] : [];
+    const src = node.getAttribute('src');
+    if (!src) return [];
+    return [
+      {
+        type: 'image',
+        attrs: {
+          src,
+          alt: node.getAttribute('alt') ?? null,
+          title: node.getAttribute('title') ?? null,
+        },
+      },
+    ];
+  }
+
+  // A footnote reference, once the definitions have been collected.
+  if (tag === 'sup') {
+    const href = node.querySelector('a')?.getAttribute('href') ?? '';
+    const text = footnoteTexts.get(href.replace(/^#/, ''));
+    if (text) return [{ type: 'footnote', content: [{ type: 'text', text }] }];
   }
 
   const next = [...marks];
@@ -116,6 +172,9 @@ function blockContent(node: ParsedNode): ContentNode[] {
 
     case 'ul':
     case 'ol':
+      // The footnote definitions have already been folded into their
+      // references; emitting the list as well would duplicate every note.
+      if (isFootnoteList(node)) return [];
       return [
         {
           type: tag === 'ul' ? 'bulletList' : 'orderedList',
@@ -184,10 +243,16 @@ function buildTable(element: HTMLElement): ContentNode {
 /** Parse an HTML fragment into canonical document JSON with persistent IDs. */
 export function htmlToContent(html: string): DocumentContent {
   const root = parse(html, { blockTextElements: { pre: true, code: true } });
-  const blocks = root.childNodes.flatMap(blockContent);
 
-  return ensureNodeIds({
-    type: 'doc',
-    content: blocks.length > 0 ? blocks : [paragraph([])],
-  }).content;
+  footnoteTexts = collectFootnotes(root);
+  try {
+    const blocks = root.childNodes.flatMap(blockContent);
+
+    return ensureNodeIds({
+      type: 'doc',
+      content: blocks.length > 0 ? blocks : [paragraph([])],
+    }).content;
+  } finally {
+    footnoteTexts = new Map();
+  }
 }

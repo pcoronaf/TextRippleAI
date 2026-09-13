@@ -11,6 +11,8 @@ import type {
   ChangeRecord,
   ChangeSource,
   CheckpointRecord,
+  CommentRecord,
+  CommentStatus,
   ContextDigest,
   ConversationRecord,
   DocumentContent,
@@ -227,6 +229,22 @@ export interface Store {
     input: { status: ImpactStatusValue; resolvedBy: string; suggestionId?: string | null },
   ): Promise<ImpactRecord>;
 
+  // ---- Comments (M8) ------------------------------------------------------
+
+  createComment(
+    documentId: string,
+    input: { blockId: string; body: string; authorId: string },
+  ): Promise<CommentRecord>;
+  listComments(
+    documentId: string,
+    options?: { blockId?: string; statuses?: CommentStatus[] },
+  ): Promise<CommentRecord[]>;
+  setCommentStatus(
+    documentId: string,
+    commentId: string,
+    input: { status: CommentStatus; resolvedBy: string },
+  ): Promise<CommentRecord>;
+
   /** Mark ledger entries as having been through analysis. */
   markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void>;
 
@@ -269,6 +287,13 @@ export interface UpdateDecisionInput {
   description?: string;
   scope?: DecisionScope;
   status?: DecisionStatus;
+}
+
+export class CommentNotFoundError extends Error {
+  constructor(readonly commentId: string) {
+    super(`Comment ${commentId} not found`);
+    this.name = 'CommentNotFoundError';
+  }
 }
 
 export class DecisionNotFoundError extends Error {

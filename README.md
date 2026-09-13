@@ -12,7 +12,7 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 - M7 complete
+## Status: M0 - M8
 
 This repository implements the first eight milestones — the document core, change intelligence,
 selection-anchored conversation, controlled AI editing, a semantic index, impact analysis and
@@ -31,7 +31,7 @@ convention.
 | **M5** | Impact analysis: clustering, candidate retrieval, ranked findings, impact briefing | ✅ built |
 | **M6** | Propagation: a finding becomes a reviewed proposal, traceable back to its cause | ✅ built |
 | **M7** | Decision memory: persistent authorial intent that stops the system re-asking | ✅ built |
-| M8 | Advanced document capabilities | not started |
+| **M8** | Footnotes, images, comments, track-change marks, citation review | ✅ built (partial - see below) |
 
 ### What works today
 
@@ -71,6 +71,12 @@ convention.
   a separate concept" — and the next analysis stops raising it, scoped to that passage rather than
   silencing the subject. Decisions travel with every AI request, are searchable, can be superseded
   or retired without being deleted, and contradictions between the ones in force are flagged.
+- **Footnotes and images** are first-class. A footnote is tracked as a block of its own, so editing
+  a note is a recorded change and the note can be an impact target - while the paragraph's prose
+  stays clean. Both round-trip through DOCX and Markdown.
+- **Comment** on a passage and resolve it, **mark what changed** since a checkpoint directly in the
+  document (drawn from the ledger, not a text diff), and review **citations**: every source, where
+  it is used, and which citing passages have moved on since you last looked.
 
 ---
 
@@ -200,6 +206,10 @@ GET    /api/documents/:id/changes/:cid/trace    why this paragraph reads the way
 GET    /api/documents/:id/decisions         list, ?q= &status=; includes contradictions
 POST   /api/documents/:id/decisions         record one
 POST   /api/documents/:id/decisions/:did    edit or retire
+GET    /api/documents/:id/comments          list, ?blockId= &status=
+POST   /api/documents/:id/comments          leave a remark on a passage
+POST   /api/documents/:id/comments/:cid     resolve or reopen
+GET    /api/documents/:id/citations         every source, where used, what drifted
 GET    /api/documents/:id/index            what the index holds and what is stale
 POST   /api/documents/:id/index            refresh whatever is stale
 GET    /api/documents/:id/search           hybrid retrieval, ?q= &mode= &limit=
@@ -238,7 +248,13 @@ npm test
 
 ## Not in this milestone
 
-Deliberately out of scope for M0–M1, per the spec's non-goals: real-time collaboration, perfect
-Word round-trip fidelity, citation management, a knowledge graph, continuous AI monitoring,
-autonomous rewriting, automatic propagation, desktop packaging, OCR. Images, footnotes and comments
-are not yet part of the DOCX baseline — see `docs/implementation-notes.md`.
+Still out of scope, per the spec's non-goals: real-time collaboration (Yjs/CRDT), perfect Word
+round-trip fidelity, a knowledge graph, continuous AI monitoring, autonomous rewriting, automatic
+propagation, desktop packaging, local model inference, PDF import, OCR, a plugin ecosystem.
+
+M8 is the spec's menu of advanced capabilities, not a checklist, and it is built in part. What is
+here: footnotes, images, comments, track-change marks and citation review. What is not, and why:
+comments are single remarks rather than threads with mentions; track-change marks show *that* a
+block changed, not intra-paragraph insert/delete runs; images are stored inline as data URIs rather
+than in object storage; footnotes reach DOCX as real Word footnotes but images reach it as alt text
+only. See `docs/implementation-notes.md`.

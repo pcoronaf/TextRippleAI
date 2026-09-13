@@ -11,6 +11,7 @@ import {
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
   DecisionNotFoundError,
+  CommentNotFoundError,
 } from '@/store';
 
 /**
@@ -30,7 +31,8 @@ export function handleError(error: unknown): NextResponse {
   if (
     error instanceof ImpactAnalysisNotFoundError ||
     error instanceof ImpactNotFoundError ||
-    error instanceof DecisionNotFoundError
+    error instanceof DecisionNotFoundError ||
+    error instanceof CommentNotFoundError
   ) {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }

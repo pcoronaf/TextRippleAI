@@ -737,3 +737,54 @@ input[type='search'] {
   color: var(--text);
   resize: vertical;
 }
+
+/* ------------------------------------------------- comments and footnotes */
+
+.comment {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  margin-bottom: 9px;
+  background: var(--surface);
+}
+
+.comment-resolved {
+  border-left-color: var(--border);
+  opacity: 0.7;
+}
+
+.comment-body {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.citation {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.ProseMirror .footnote {
+  vertical-align: super;
+  font-size: 0.7em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+  cursor: text;
+}
+
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+}
+
+/* Track-change marks, drawn from the ledger rather than from a text diff. */
+.ProseMirror .block-changed {
+  background: var(--insert-bg);
+  box-shadow: -10px 0 0 0 var(--insert-bg), inset 3px 0 0 0 var(--insert);
+  border-radius: 2px;
+}
