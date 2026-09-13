@@ -739,7 +739,7 @@ rewritten", which is the question this product is uniquely placed to answer.
 | Spec | Here | Why |
 |---|---|---|
 | "Comment threads" | Single remarks with a status | Threading is a UI affordance over the same record; the anchoring and the resolve/reopen lifecycle are the parts the change model has to get right. Replies can be added without a schema change beyond a parent ID. |
-| "Track changes visualisation" | Block-level marks from the ledger | Word-style insert/delete runs need intra-block diff storage that the ledger does not keep. Marking the block is honest about what is known. |
+| "Track changes visualisation" | Word-level insertion marks from the ledger | Deletions are not shown: the text is not in the document, and rendering it would mean displaying words the document does not contain. A block whose earlier text the ledger cannot supply is marked whole. |
 | "Citation management" | Citation review | Managing citations is a bibliography product. Detecting that a cited passage drifted is the change-aware half, and the half nothing else does. |
 | "Image support" | Inline in the document, alt text in DOCX | See above. |
 
@@ -753,8 +753,12 @@ rewritten", which is the question this product is uniquely placed to answer.
 - **A comment's anchor can be orphaned.** If the block it points at is deleted, the comment remains
   and lists as anchored to a block that is no longer in the document. It is kept rather than
   removed, consistent with the rest of the system, but nothing yet surfaces that state.
-- **Track-change marks do not distinguish an insertion from a deletion**, and a block that was
-  deleted entirely has nothing left to decorate — it appears in the change list only.
+- **Track-change marks show insertions, not deletions.** Removed text is not in the document, so
+  marking it would mean rendering words that are not there; a deletion shows in the change list
+  only. A block deleted outright likewise has nothing left to decorate.
+- **The marks compare against the review boundary, not the last edit.** A paragraph edited five
+  times since a checkpoint is marked with its net difference from the checkpoint, which is the
+  question the boundary is asking.
 - **Citation grouping is by normalised text**, so "ISO/IEC 42001:2023" and "ISO 42001" are two
   sources. Identity resolution needs a bibliographic database, which is a non-goal.
 

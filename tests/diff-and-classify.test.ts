@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { classifyChange, isTrivial } from '@/core/classify';
-import { diffStats, diffWords } from '@/core/diff';
+import { diffStats, diffWords, insertedRanges } from '@/core/diff';
 
 const render = (before: string, after: string) =>
   diffWords(before, after)
@@ -133,5 +133,46 @@ describe('classifyChange', () => {
         'The following pages set out, step by step, how the study was carried out and why each decision was taken.',
       ),
     ).toBe('editorial');
+  });
+});
+
+describe('inserted ranges', () => {
+  const applied = (before: string, after: string) =>
+    insertedRanges(before, after).map((range) => after.slice(range.from, range.to));
+
+  it('finds the words that are new', () => {
+    expect(applied('The system shall log access.', 'The system must log access.')).toEqual(['must']);
+  });
+
+  it('reports nothing when the text is unchanged', () => {
+    expect(insertedRanges('Identical text.', 'Identical text.')).toEqual([]);
+  });
+
+  it('treats a block with no earlier text as entirely new', () => {
+    expect(insertedRanges('', 'A brand new paragraph.')).toEqual([
+      { from: 0, to: 'A brand new paragraph.'.length },
+    ]);
+  });
+
+  it('reports nothing for a deletion, which occupies no space in the result', () => {
+    // The removed words are not in the document, so there is nothing to mark.
+    expect(insertedRanges('Keep this and drop that.', 'Keep this.')).toEqual([]);
+  });
+
+  it('merges adjacent insertions into one range', () => {
+    const ranges = insertedRanges('a d', 'a b c d');
+    expect(ranges).toHaveLength(1);
+    expect('a b c d'.slice(ranges[0].from, ranges[0].to)).toBe(' b c');
+  });
+
+  it('gives offsets that index into the new text, not the old', () => {
+    const before = 'Chapter 3 requires continuous monitoring of the system.';
+    const after = 'Chapter 3 requires periodic review of the system.';
+
+    for (const range of insertedRanges(before, after)) {
+      expect(range.from).toBeGreaterThanOrEqual(0);
+      expect(range.to).toBeLessThanOrEqual(after.length);
+    }
+    expect(applied(before, after).join('')).toContain('periodic');
   });
 });

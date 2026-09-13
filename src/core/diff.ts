@@ -131,3 +131,42 @@ export function diffStats(segments: DiffSegment[]): {
   }
   return { inserted, deleted, unchanged };
 }
+
+export interface TextRange {
+  from: number;
+  to: number;
+}
+
+/**
+ * Character ranges in `after` that were not in `before`.
+ *
+ * Used to mark, inside a changed paragraph, the words that actually moved
+ * rather than shading the whole thing. Deletions are not represented: the text
+ * is gone from `after`, and showing it would mean inserting words the document
+ * does not contain.
+ *
+ * Adjacent insertions are merged so a run of edited words is one mark rather
+ * than a row of them separated by nothing.
+ */
+export function insertedRanges(before: string, after: string): TextRange[] {
+  if (before === after) return [];
+  if (!before) return after ? [{ from: 0, to: after.length }] : [];
+
+  const ranges: TextRange[] = [];
+  let offset = 0;
+
+  for (const segment of diffWords(before, after)) {
+    // A deleted segment occupies no space in `after`, so it moves no offset.
+    if (segment.op === 'delete') continue;
+
+    const length = segment.value.length;
+    if (segment.op === 'insert' && length > 0) {
+      const last = ranges[ranges.length - 1];
+      if (last && last.to === offset) last.to = offset + length;
+      else ranges.push({ from: offset, to: offset + length });
+    }
+    offset += length;
+  }
+
+  return ranges;
+}

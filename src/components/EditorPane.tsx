@@ -12,7 +12,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { useEffect } from 'react';
 
 import { TEXT_BLOCK_TYPES } from '@/core/document';
-import { ChangedSince, changedSinceKey } from '@/editor/extensions/changed-since';
+import { ChangedSince, changedSinceKey, type ChangedBlock } from '@/editor/extensions/changed-since';
 import { Footnote } from '@/editor/extensions/footnote';
 import { PersistentId } from '@/editor/extensions/persistent-id';
 import type { DocumentContent } from '@/core/types';
@@ -33,7 +33,7 @@ export interface EditorPaneProps {
   /** Raised by the floating toolbar. The selection is already reported. */
   onAskAction?: (action: 'ask' | 'explain' | 'modify') => void;
   /** Blocks changed since the chosen review boundary, marked in the margin. */
-  changedBlockIds?: string[];
+  changedBlocks?: ChangedBlock[];
   /** Handed the editor once it exists, so an accepted proposal can be applied. */
   onEditorReady?: (editor: Editor) => void;
 }
@@ -73,7 +73,7 @@ export function EditorPane({
   onBlur,
   onSelectionChange,
   onAskAction,
-  changedBlockIds,
+  changedBlocks,
   onEditorReady,
 }: EditorPaneProps) {
   const editor = useEditor({
@@ -114,9 +114,9 @@ export function EditorPane({
   useEffect(() => {
     if (!editor) return;
     editor.view.dispatch(
-      editor.state.tr.setMeta(changedSinceKey, { blockIds: changedBlockIds ?? [] }),
+      editor.state.tr.setMeta(changedSinceKey, { blocks: changedBlocks ?? [] }),
     );
-  }, [changedBlockIds, editor]);
+  }, [changedBlocks, editor]);
 
   return (
     <div className="editor-scroll">

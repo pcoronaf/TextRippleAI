@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { buildOutline } from '@/core/document';
+import { buildOutline, flattenBlocks } from '@/core/document';
+import { insertedRanges } from '@/core/diff';
 import { searchDecisions, type DecisionConflict } from '@/core/decisions';
 import { useDocumentSession } from '@/editor/use-document-session';
 import type { TokenUsage } from '@/ai/types';
@@ -25,6 +26,7 @@ import type {
 } from '@/core/types';
 
 import { EditorPane, type EditorSelection } from './EditorPane';
+import type { ChangedBlock } from '@/editor/extensions/changed-since';
 import type { Editor } from '@tiptap/react';
 import type { AskAction } from './AskPanel';
 import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
@@ -74,7 +76,7 @@ export function Workspace({
 
   const [comments, setComments] = useState<AnchoredComment[]>([]);
   const [citations, setCitations] = useState<CitationGroup[]>([]);
-  const [changedBlockIds, setChangedBlockIds] = useState<string[]>([]);
+  const [changedSince, setChangedSince] = useState<ChangeRecord[]>([]);
   const [since, setSince] = useState<string | null>(null);
   const [showChanges, setShowChanges] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -130,10 +132,34 @@ export function Workspace({
 
     setComments(commentBody.comments ?? []);
     setCitations(citationBody.citations ?? []);
-    setChangedBlockIds([
-      ...new Set((ledger.changes ?? []).map((change: ChangeRecord) => change.blockId)),
-    ] as string[]);
+    setChangedSince(ledger.changes ?? []);
   }, [record.id, since]);
+
+  /**
+   * What to mark in the document, and where.
+   *
+   * The comparison is against the text as it stood at the review boundary -
+   * the `before` of the *earliest* change since then - not against the last
+   * individual edit. Someone reviewing "what changed since the methodology was
+   * approved" wants the net effect of a week of edits, not the final keystroke.
+   *
+   * A block with no recorded before-text was added outright; it carries no
+   * ranges and the plugin marks the whole thing.
+   */
+  const changedBlocks = useMemo<ChangedBlock[]>(() => {
+    const earliest = new Map<string, string | null>();
+    for (const change of [...changedSince].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))) {
+      if (!earliest.has(change.blockId)) earliest.set(change.blockId, change.before ?? null);
+    }
+
+    const current = new Map(flattenBlocks(content).map((block) => [block.id, block.text]));
+
+    return [...earliest].map(([id, before]) => {
+      const after = current.get(id);
+      if (before === null || after === undefined) return { id };
+      return { id, ranges: insertedRanges(before, after) };
+    });
+  }, [changedSince, content]);
 
   const refreshSettings = useCallback(async () => {
     const response = await fetch('/api/settings');
@@ -597,7 +623,7 @@ export function Workspace({
             onBlur={() => void flushAndSave()}
             onSelectionChange={setSelection}
             onAskAction={onAskAction}
-            changedBlockIds={showChanges ? changedBlockIds : []}
+            changedBlocks={showChanges ? changedBlocks : []}
             onEditorReady={(instance) => {
               editorRef.current = instance;
             }}
@@ -682,7 +708,7 @@ export function Workspace({
               onSinceChange: setSince,
               showChanges,
               onShowChangesChange: setShowChanges,
-              changedCount: changedBlockIds.length,
+              changedCount: changedBlocks.length,
               anchorBlockId: selection?.blockId ?? null,
               busy: reviewBusy,
               onComment: (blockId, body) => void addComment(blockId, body),

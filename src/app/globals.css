@@ -796,3 +796,11 @@ input[type='search'] {
   border-left: 2px solid var(--border);
   color: var(--text-muted);
 }
+
+/* Words that are new since the review boundary. The whole-block mark remains
+   for a passage whose earlier text the ledger cannot supply. */
+.text-changed {
+  background: var(--accent-soft, rgba(120, 170, 255, 0.22));
+  border-bottom: 1px solid var(--accent, #4a7fd0);
+  border-radius: 2px;
+}
