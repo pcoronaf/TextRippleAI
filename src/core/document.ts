@@ -265,7 +265,9 @@ export function enclosingHeadings(
 }
 
 /** Document title derived from the first level-1 heading, when present. */
-export function inferTitle(content: DocumentContent, fallback = 'Untitled document'): string {
+export const UNTITLED_DOCUMENT = 'Untitled document';
+
+export function inferTitle(content: DocumentContent, fallback = UNTITLED_DOCUMENT): string {
   const outline = buildOutline(content);
   const first = outline.find((item) => item.level === 1) ?? outline[0];
   return first?.title ?? fallback;
@@ -279,3 +281,21 @@ export function emptyDocument(): DocumentContent {
   }).content;
 }
 
+
+/**
+ * The title a document should carry after an edit.
+ *
+ * A title the author gave it - or that an import took from the filename - is
+ * theirs, and saving must not quietly rename the document to whatever its
+ * first heading happens to say. Importing `Book_DRAFT.docx` and then typing one
+ * character should not turn it into "Chapter 1".
+ *
+ * Re-inference therefore applies only while the title is still the placeholder,
+ * which is the case that motivated it: a document created empty and then
+ * written into.
+ */
+export function retitleOnEdit(current: string | null | undefined, content: DocumentContent): string {
+  const title = current?.trim();
+  if (title && title !== UNTITLED_DOCUMENT) return title;
+  return inferTitle(content, title || UNTITLED_DOCUMENT);
+}

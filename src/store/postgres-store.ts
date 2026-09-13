@@ -10,7 +10,7 @@ import type { Pool, PoolClient } from 'pg';
 import { replaceBlockText } from '@/core/apply';
 import { planInvalidation } from '@/core/index-plan';
 import { classifyChange } from '@/core/classify';
-import { emptyDocument, ensureNodeIds, flattenBlocks, inferTitle } from '@/core/document';
+import { emptyDocument, ensureNodeIds, flattenBlocks, inferTitle, retitleOnEdit } from '@/core/document';
 import { contentHash } from '@/core/hash';
 import {
   newChangeId,
@@ -376,7 +376,7 @@ export class PostgresStore implements Store {
       }
 
       const revision = currentRevision + 1;
-      const title = input.title?.trim() || inferTitle(content, locked.rows[0].title);
+      const title = input.title?.trim() || retitleOnEdit(locked.rows[0].title, content);
 
       const updated = await client.query(
         `update documents
@@ -809,7 +809,7 @@ export class PostgresStore implements Store {
       const { content } = ensureNodeIds(
         replaceBlockText(currentContent, suggestion.blockId, suggestion.proposed),
       );
-      const title = inferTitle(content, locked.rows[0].title);
+      const title = retitleOnEdit(locked.rows[0].title, content);
 
       const updatedDocument = await client.query(
         `update documents

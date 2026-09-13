@@ -17,7 +17,7 @@
 
 import { htmlToContent } from './html';
 import { decodeImage } from './image-data';
-import { flattenBlocks } from '@/core/document';
+import { flattenBlocks, nodeText } from '@/core/document';
 import type { ContentNode, DocumentContent } from '@/core/types';
 
 const HEADING_LEVELS = [
@@ -31,12 +31,64 @@ const HEADING_LEVELS = [
 
 const ORDERED_LIST_REFERENCE = 'textripple-ordered';
 
+/**
+ * Word has no horizontal-rule element.
+ *
+ * What Word's UI calls a horizontal rule is a VML rectangle carrying
+ * `o:hr="t"`, and mammoth - which understands the drawing model, not VML -
+ * drops it, along with the paragraph holding it. The rule leaves no trace in
+ * the HTML at all, so a manuscript that uses rules as scene breaks loses every
+ * one of them silently. A 3500-block book was found to lose 166 that way.
+ *
+ * The paragraph is therefore rewritten to a sentinel before conversion and
+ * turned back into a horizontalRule afterwards. The sentinel is built from a
+ * private-use codepoint, which cannot occur in real prose.
+ */
+const HR_SENTINEL = '\uE000textripple-horizontal-rule\uE000';
+
+/** As it comes back, tolerating a converter that strips the private-use marks. */
+const HR_TEXT = /^\uE000?textripple-horizontal-rule\uE000?$/;
+
+/** A whole paragraph whose content includes a VML horizontal rule. */
+const HR_PARAGRAPH = /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*?o:hr="t"[\s\S]*?<\/w:p>/g;
+
+async function markHorizontalRules(buffer: Buffer): Promise<Buffer> {
+  const { default: JSZip } = await import('jszip');
+  const zip = await JSZip.loadAsync(buffer);
+  const part = zip.file('word/document.xml');
+  if (!part) return buffer;
+
+  const xml = await part.async('string');
+  // Nothing to do for the overwhelming majority of documents, and re-zipping
+  // one needlessly would be a cost paid on every import.
+  if (!xml.includes('o:hr="t"')) return buffer;
+
+  zip.file(
+    'word/document.xml',
+    xml.replace(HR_PARAGRAPH, `<w:p><w:r><w:t>${HR_SENTINEL}</w:t></w:r></w:p>`),
+  );
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+/** Turn the sentinel paragraphs back into rules, at any depth. */
+function restoreHorizontalRules(content: DocumentContent): DocumentContent {
+  const convert = (node: ContentNode): ContentNode => {
+    if (node.type === 'paragraph' && HR_TEXT.test(nodeText(node).trim())) {
+      return { type: 'horizontalRule' };
+    }
+    return node.content ? { ...node, content: node.content.map(convert) } : node;
+  };
+
+  return { ...content, content: content.content.map(convert) };
+}
+
 /** DOCX -> canonical document JSON. */
 export async function importDocx(buffer: Buffer): Promise<DocumentContent> {
+  const prepared = await markHorizontalRules(buffer);
   const mammoth = await import('mammoth');
   const convert = (mammoth as any).convertToHtml ?? (mammoth as any).default?.convertToHtml;
-  const result = await convert({ buffer });
-  return htmlToContent(result.value);
+  const result = await convert({ buffer: prepared });
+  return restoreHorizontalRules(htmlToContent(result.value));
 }
 
 /** Collect every footnote in reading order, numbered from one. */

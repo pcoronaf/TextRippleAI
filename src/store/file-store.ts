@@ -17,6 +17,7 @@ import {
   ensureNodeIds,
   flattenBlocks,
   inferTitle,
+  retitleOnEdit,
   regions,
 } from '@/core/document';
 import { contentHash } from '@/core/hash';
@@ -292,7 +293,7 @@ export class FileStore implements Store {
 
       const document: DocumentRecord = {
         ...data.document,
-        title: input.title?.trim() || inferTitle(content, data.document.title),
+        title: input.title?.trim() || retitleOnEdit(data.document.title, content),
         currentRevision: revision,
         updatedAt: now,
       };
@@ -678,7 +679,7 @@ export class FileStore implements Store {
 
       const document: DocumentRecord = {
         ...data.document,
-        title: inferTitle(content, data.document.title),
+        title: retitleOnEdit(data.document.title, content),
         currentRevision: revision,
         updatedAt: now,
       };
