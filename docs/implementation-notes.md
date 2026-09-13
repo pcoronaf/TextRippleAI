@@ -770,3 +770,112 @@ itself lists them as initial non-goals:
 - **Desktop packaging**, **local model inference**, **PDF import/OCR**, and a **plugin ecosystem**.
   All listed as non-goals; none of them exercise the change model, which is what these milestones
   exist to prove.
+
+---
+
+# Packaging — one Windows executable, no dependencies
+
+Not a milestone from the spec; the spec lists desktop packaging among the initial non-goals, and
+this is not that. It is the same web app, served locally by a binary that carries its own runtime,
+so that someone without Node can run it. Nothing about the architecture changes: the same Next.js
+server, the same store boundary, the same file store.
+
+## Decisions
+
+### A Node Single Executable Application, not an installer or a desktop shell
+
+Three ways to ship this were on the table.
+
+A **portable folder** (the standalone server plus a Node runtime, zipped) is the least work and the
+least useful: the user unzips eleven thousand files and hunts for the thing to double-click.
+
+**Tauri or Electron** gives a real desktop window, and costs a Rust or Chromium toolchain in CI, an
+installer, an update channel, and a second process model to reason about — for a product whose
+interface is a document in a browser. The spec calls desktop packaging a non-goal, and it is right.
+
+A **Node SEA** puts the Node runtime and the whole built app into one file. The runtime is already
+a dependency; this just stops asking the user to install it separately. No installer, no registry,
+no toolchain beyond what CI already has.
+
+The cost is size — the Node runtime dominates — and that SEA is still a young feature. Both are
+acceptable for a binary that is rebuilt by CI on every push.
+
+### The app is carried as a zip and unpacked on first run
+
+A SEA embeds *assets*, but Next's standalone server expects to read its own file tree from disk:
+`.next/`, `required-server-files.json`, a `node_modules` it resolves normally. Faking that inside
+the binary would mean intercepting module resolution and filesystem reads — a lot of machinery to
+avoid writing files that have to exist anyway.
+
+So the archive is extracted once to `%LOCALAPPDATA%\TextRippleAI\app-<build id>` and the server is
+loaded from there with a `require` rooted in that directory. The build id is the hash of the
+archive, so a new build unpacks beside the old one rather than over it, and extraction is atomic:
+it goes to a staging directory and is renamed into place, so an interrupted first run leaves
+nothing that a later run could mistake for a good installation.
+
+### The zip reader is written by hand
+
+A SEA entry point must be a single file with no dependencies. Node ships `zlib` but no zip reader,
+so `desktop/launcher.js` contains one — about 120 lines for the central directory, the local
+headers, and stored/deflated entries.
+
+Two things it does that a convenience library would not necessarily do:
+
+- **Every entry's CRC is checked.** The archive arrives inside a downloaded binary. A truncated
+  download should fail while unpacking, with a clear message, rather than three seconds later as an
+  incomprehensible error from inside the server.
+- **Entry paths are refused if they escape the destination.** We build the archive ourselves, so
+  today it cannot contain `../`. But a zip reader that trusts its input is exactly how a packaged
+  app writes files it was never meant to, and the guard costs four lines.
+
+### The build verifies the archive before it ships it
+
+`scripts/build-exe.mjs` extracts the archive it has just written, using the launcher's own reader,
+and compares the result against the source tree file by file and hash by hash. A packaging bug then
+fails on the build machine rather than on a desktop.
+
+The writer and the reader deliberately share the CRC implementation — that part is not
+independently verified — but the file list, the lengths and the content hashes are, and the
+round-trip is also exercised directly by unit tests with an empty file, a binary file, a unicode
+filename, a deliberately corrupted payload and a path-traversal attempt.
+
+### CI starts the executable
+
+The strongest thing here: the Windows job runs the binary it just built with `--smoke`, which
+unpacks it, starts the server inside it, and checks that `/api/ai/status`, `/api/documents` and `/`
+all answer. A build that packages wrong, unpacks wrong or fails to boot fails in CI.
+
+This matters because there is no Node, npm or Docker on the development machine — CI is the only
+place anything here can actually run. Without the smoke run the first person to execute the binary
+would be whoever downloaded it.
+
+### Documents live in %LOCALAPPDATA%, not beside the executable
+
+The file store already read `DATA_DIR`, so the launcher just sets it. Writing next to the exe would
+break the moment someone ran it from `Program Files`, a read-only share or a Downloads folder
+synced by something. It also means deleting the exe does not delete the documents, and that two
+different builds share one document set.
+
+### It binds loopback, and a second launch joins the first
+
+`127.0.0.1` only: this is a local application, and an editor that silently served the user's
+manuscript to the network would be a poor default.
+
+It tries port 3717 first. If something is already there and answers like this app, the launcher
+reopens that browser tab and exits rather than starting a second server over the same documents —
+the file store is not built for two writers. If the port is taken by something else, it picks a
+free one.
+
+## Known limitations
+
+- **The executable is unsigned**, so SmartScreen warns on first launch. Signing needs a
+  certificate, which is an organisational matter rather than a technical one.
+- **Windows x64 only.** Nothing in the approach is Windows-specific and the build script runs
+  elsewhere, but only that target is built and smoke-tested.
+- **Roughly 100 MB**, most of it the Node runtime.
+- **No auto-update.** A new build is a new download, and it unpacks beside the old one; the old
+  `app-<id>` directories are never cleaned up.
+- **First launch is slow** — the archive has to be unpacked before the server starts.
+- **Closing the console window stops the app.** There is no tray icon and no service.
+- **The DOCX and PDF paths are unchanged**, as is everything else: this packages the app, it does
+  not alter it.

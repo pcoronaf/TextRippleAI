@@ -209,6 +209,29 @@ function postjectCli() {
   return path.join(path.dirname(manifestPath), relative);
 }
 
+/**
+ * Find signtool.exe.
+ *
+ * It is part of the Windows SDK and is not on PATH on a GitHub runner, so fall
+ * back to looking through the installed kits and taking the newest.
+ */
+function findSigntool() {
+  const onPath = spawnSync('where', ['signtool'], { stdio: 'pipe' });
+  if (onPath.status === 0) {
+    const first = onPath.stdout.toString().split(/\r?\n/).find(Boolean);
+    if (first && fs.existsSync(first)) return first;
+  }
+
+  const kits = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin';
+  if (!fs.existsSync(kits)) return null;
+  const candidates = fs
+    .readdirSync(kits)
+    .sort()
+    .map((version) => path.join(kits, version, 'x64', 'signtool.exe'))
+    .filter((candidate) => fs.existsSync(candidate));
+  return candidates.at(-1) ?? null;
+}
+
 function build() {
   fs.mkdirSync(DIST, { recursive: true });
 
@@ -247,15 +270,20 @@ function build() {
   fs.copyFileSync(process.execPath, exePath);
 
   if (process.platform === 'win32') {
-    // Injecting into a signed binary invalidates the signature, so drop it
-    // first when the Windows SDK is around. Not fatal if it is not: an
-    // unsigned-but-modified exe still runs.
-    const removed = spawnSync('signtool', ['remove', '/s', exePath], { stdio: 'pipe' });
-    console.log(
-      removed.status === 0
-        ? '   removed the existing Authenticode signature'
-        : '   no signtool available; continuing with an invalidated signature',
-    );
+    // The official node.exe is signed, and injecting into it invalidates that
+    // signature. A binary carrying a *corrupt* signature looks worse to
+    // SmartScreen and to antivirus than an unsigned one, so remove it first.
+    const signtool = findSigntool();
+    if (signtool) {
+      const removed = spawnSync(signtool, ['remove', '/s', exePath], { stdio: 'pipe' });
+      console.log(
+        removed.status === 0
+          ? '   removed the Authenticode signature inherited from node.exe'
+          : `   signtool could not remove the signature (exit ${removed.status}); continuing`,
+      );
+    } else {
+      console.log('   no signtool found; the binary will keep an invalidated signature');
+    }
   }
 
   console.log('== injecting the blob ==');
