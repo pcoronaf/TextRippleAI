@@ -790,9 +790,18 @@ async function main() {
     (trace.originChanges?.length ?? 0) > 0,
     `${trace.originChanges?.length} origin change(s)`,
   );
+  // Origins are whatever the analysis attributed the finding to - which may
+  // include an earlier accepted AI edit, since those have consequences too.
+  // What must hold is that they are real ledger entries, and not this change.
+  const ledgerNow = await json(`/api/documents/${id}/changes`);
+  const ledgerIds = new Set(ledgerNow.changes.map((change) => change.id));
   check(
-    'the origin change is one the author actually made',
-    trace.originChanges?.every((change) => change.source === 'human'),
+    'every origin is a real ledger entry',
+    trace.originChanges?.every((change) => ledgerIds.has(change.id)),
+  );
+  check(
+    'the propagated change is not listed as its own origin',
+    !trace.originChanges?.some((change) => change.id === acceptedPropagation.change.id),
   );
 
   const plainTrace = await json(
