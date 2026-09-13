@@ -11,14 +11,21 @@ jobs:
     name: Typecheck, test, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
       # No lockfile is committed yet, so `npm install` rather than `npm ci`.
       - run: npm install
+
+      - name: Capture the resolved lockfile
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-lock
+          path: package-lock.json
+          if-no-files-found: error
 
       - name: Typecheck
         run: npm run typecheck
@@ -54,9 +61,9 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -78,9 +85,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -98,7 +105,7 @@ jobs:
         run: .\dist\TextRippleAI.exe --smoke
 
       - name: Upload the executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: TextRippleAI-windows-x64
           path: dist/TextRippleAI.exe
