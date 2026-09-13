@@ -29,6 +29,8 @@ export interface ImpactPanelProps {
   onAcceptProposal: (suggestionId: string) => void;
   onRejectProposal: (suggestionId: string) => void;
   onDiscuss: (impact: ImpactRecord) => void;
+  /** Record why this consequence is being refused, so it stops recurring. */
+  onRecordDecision: (impact: ImpactRecord, reason: string) => void;
 }
 
 const SEVERITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
@@ -81,8 +83,12 @@ export function ImpactPanel({
   onAcceptProposal,
   onRejectProposal,
   onDiscuss,
+  onRecordDecision,
 }: ImpactPanelProps) {
   const [showResolved, setShowResolved] = useState(false);
+  /** The finding whose refusal is being explained, if any. */
+  const [refusing, setRefusing] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
 
   const open = impacts.filter((impact) => impact.status === 'pending');
   const resolved = impacts.filter((impact) => impact.status !== 'pending');
@@ -231,7 +237,7 @@ export function ImpactPanel({
                   <button disabled={busy} onClick={() => onResolve(impact.id, 'needs_review')}>
                     Review later
                   </button>
-                  <button disabled={busy} onClick={() => onResolve(impact.id, 'accepted_no_change')}>
+                  <button disabled={busy} onClick={() => setRefusing(impact.id)}>
                     No change needed
                   </button>
                   <button disabled={busy} onClick={() => onResolve(impact.id, 'dismissed')}>
@@ -240,6 +246,44 @@ export function ImpactPanel({
                 </div>
               ) : (
                 <p className="suggestion-resolved">{STATUS_LABELS[impact.status]}</p>
+              )}
+
+              {/*
+                Refusing a consequence is worth more than a status change: the
+                reason is what stops the next analysis raising it again.
+              */}
+              {refusing === impact.id && (
+                <div style={{ marginTop: 10 }}>
+                  <textarea
+                    rows={2}
+                    autoFocus
+                    placeholder="Why does this passage correctly stay as it is?"
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                  <div className="field-row" style={{ marginBottom: 0 }}>
+                    <button
+                      className="primary"
+                      disabled={busy || !reason.trim()}
+                      onClick={() => {
+                        onRecordDecision(impact, reason.trim());
+                        setReason('');
+                        setRefusing(null);
+                      }}
+                    >
+                      Record as a decision
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        onResolve(impact.id, 'accepted_no_change');
+                        setRefusing(null);
+                      }}
+                    >
+                      Just mark it settled
+                    </button>
+                  </div>
+                </div>
               )}
 
               {/* The drafted edit, reviewed exactly like any other proposal. */}

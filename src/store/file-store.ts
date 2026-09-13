@@ -24,6 +24,7 @@ import {
   newChangeId,
   newCheckpointId,
   newConversationId,
+  newDecisionId,
   newDocumentId,
   newEmbeddingId,
   newImpactAnalysisId,
@@ -38,6 +39,8 @@ import type {
   ChangeRecord,
   CheckpointRecord,
   ConversationRecord,
+  DecisionRecord,
+  DecisionStatus,
   DocumentContent,
   DocumentNodeRecord,
   DocumentRecord,
@@ -65,6 +68,7 @@ import {
   SuggestionStaleError,
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
+  DecisionNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
@@ -72,7 +76,9 @@ import {
   type CreateSuggestionInput,
   type CreateDocumentInput,
   type CompleteImpactAnalysisInput,
+  type CreateDecisionInput,
   type CreateImpactAnalysisInput,
+  type UpdateDecisionInput,
   type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
@@ -107,6 +113,7 @@ interface DocumentFile {
   semanticUnits?: SemanticUnitRecord[];
   impactAnalyses?: ImpactAnalysisRecord[];
   impacts?: ImpactRecord[];
+  decisions?: DecisionRecord[];
 }
 
 /**
@@ -1080,6 +1087,97 @@ export class FileStore implements Store {
     });
   }
 
+  // ---- Decisions ----------------------------------------------------------
+
+  async createDecision(
+    documentId: string,
+    input: CreateDecisionInput,
+  ): Promise<DecisionRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      const decision: DecisionRecord = {
+        id: newDecisionId(),
+        documentId,
+        title: input.title,
+        description: input.description,
+        scope: input.scope,
+        status: 'accepted',
+        source: input.source,
+        suppressBlockId: input.suppressBlockId ?? null,
+        suppressTerms: input.suppressTerms ?? [],
+        suppressImpactType: input.suppressImpactType ?? null,
+        sourceImpactId: input.sourceImpactId ?? null,
+        sourceConversationId: input.sourceConversationId ?? null,
+        supersedesDecisionId: input.supersedesDecisionId ?? null,
+        createdBy: input.createdBy,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Superseding is part of the same write: there is never a moment where
+      // both the old and the new decision are in force.
+      const existing = (data.decisions ?? []).map((entry) =>
+        input.supersedesDecisionId && entry.id === input.supersedesDecisionId
+          ? { ...entry, status: 'superseded' as const, updatedAt: now }
+          : entry,
+      );
+
+      await this.write({ ...data, decisions: [...existing, decision] });
+      return decision;
+    });
+  }
+
+  async getDecision(documentId: string, decisionId: string): Promise<DecisionRecord | null> {
+    const data = await this.read(documentId);
+    return (data?.decisions ?? []).find((entry) => entry.id === decisionId) ?? null;
+  }
+
+  async listDecisions(
+    documentId: string,
+    options: { statuses?: DecisionStatus[] } = {},
+  ): Promise<DecisionRecord[]> {
+    const data = await this.read(documentId);
+    if (!data) throw new DocumentNotFoundError(documentId);
+
+    return (data.decisions ?? [])
+      .filter((entry) => !options.statuses || options.statuses.includes(entry.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async updateDecision(
+    documentId: string,
+    decisionId: string,
+    input: UpdateDecisionInput,
+  ): Promise<DecisionRecord> {
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const decisions = data.decisions ?? [];
+      const existing = decisions.find((entry) => entry.id === decisionId);
+      if (!existing) throw new DecisionNotFoundError(decisionId);
+
+      const updated: DecisionRecord = {
+        ...existing,
+        title: input.title ?? existing.title,
+        description: input.description ?? existing.description,
+        scope: input.scope ?? existing.scope,
+        status: input.status ?? existing.status,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await this.write({
+        ...data,
+        decisions: decisions.map((entry) => (entry.id === decisionId ? updated : entry)),
+      });
+
+      return updated;
+    });
+  }
+
   async markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void> {
     if (changeIds.length === 0) return;
 
@@ -1102,6 +1200,7 @@ export class FileStore implements Store {
 export interface StoredImpactData {
   impactAnalyses?: ImpactAnalysisRecord[];
   impacts?: ImpactRecord[];
+  decisions?: DecisionRecord[];
 }
 
 /** Which summaries a document ought to have, by type. */

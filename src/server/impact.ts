@@ -24,6 +24,7 @@ import {
 } from '@/ai/impact-prompt';
 import { clusterChanges, type ChangeCluster } from '@/core/cluster';
 import { isTrivial } from '@/core/classify';
+import { decisionSuppresses } from '@/core/decisions';
 import { enclosingHeadings, flattenBlocks } from '@/core/document';
 import type {
   ChangeRecord,
@@ -314,11 +315,41 @@ export async function analyseImpact(
   // --- retrieve and rank ----------------------------------------------------
   const blocksInDocument = flattenBlocks(content).length;
   const limit = options.candidateLimit ?? candidateLimitFor(blocksInDocument);
-  const candidates = await retrieveCandidates(documentId, content, clusters, limit);
+  const retrieved = await retrieveCandidates(documentId, content, clusters, limit);
+
+  /*
+   * Drop what the author has already settled.
+   *
+   * This happens before reasoning rather than after: a decision not to
+   * propagate is an answer, and paying to have a model re-derive it - then
+   * showing the author a finding they already refused - is the failure this
+   * milestone exists to prevent.
+   */
+  const decisions = await store.listDecisions(documentId, { statuses: ['accepted'] });
+  const clusterTerms = clusters.flatMap((cluster) => [
+    ...cluster.terms.removed,
+    ...cluster.terms.added,
+  ]);
+
+  const candidates = retrieved.filter(
+    (candidate) =>
+      !decisions.some((decision) =>
+        decisionSuppresses(decision, {
+          targetBlockId: candidate.blockId,
+          // The type is not known before reasoning, so suppression at this
+          // stage matches on passage and vocabulary only. A decision that
+          // names a type still narrows the finding later.
+          impactType: decision.suppressImpactType ?? '',
+          terms: clusterTerms,
+        }),
+      ),
+  );
+  const suppressedByDecisions = retrieved.length - candidates.length;
 
   const retrieval = {
     blocksInDocument,
     candidatesConsidered: candidates.length,
+    suppressedByDecisions,
     reductionPercent:
       blocksInDocument === 0
         ? 0

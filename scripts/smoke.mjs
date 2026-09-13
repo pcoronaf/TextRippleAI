@@ -857,6 +857,139 @@ async function main() {
   check('analysing a document with no changes is refused', emptyAnalysis.status === 400);
   await api(`/api/documents/${fresh.document.id}`, { method: 'DELETE' });
 
+  console.log('\nDecision memory');
+  const emptyDecisions = await json(`/api/documents/${id}/decisions`);
+  check('a document starts with no decisions', emptyDecisions.decisions?.length === 0);
+
+  const recorded = await json(`/api/documents/${id}/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Prefer supervisory control terminology',
+      description: "Use 'supervisory control' rather than 'oversight' in operational sections.",
+      scope: { type: 'document' },
+      source: 'manual',
+    }),
+  });
+  check('a decision can be recorded', Boolean(recorded.decision?.id));
+  check('it starts in force', recorded.decision?.status === 'accepted');
+
+  const searched = await json(
+    `/api/documents/${id}/decisions?q=${encodeURIComponent('supervisory')}`,
+  );
+  check('decisions are searchable', searched.decisions?.length === 1);
+  const missed = await json(`/api/documents/${id}/decisions?q=${encodeURIComponent('zzzzz')}`);
+  check('a search that matches nothing returns nothing', missed.decisions?.length === 0);
+
+  const conflicting = await json(`/api/documents/${id}/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Contradicts the first',
+      description: "Use 'oversight' rather than 'supervisory control' everywhere.",
+      scope: { type: 'document' },
+    }),
+  });
+  const withConflict = await json(`/api/documents/${id}/decisions`);
+  check('a contradiction between decisions is flagged', (withConflict.conflicts?.length ?? 0) > 0);
+
+  const retired = await json(
+    `/api/documents/${id}/decisions/${conflicting.decision.id}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'retired' }),
+    },
+  );
+  check('a decision can be retired', retired.decision?.status === 'retired');
+
+  const afterRetire = await json(`/api/documents/${id}/decisions`);
+  check('retiring clears the contradiction', (afterRetire.conflicts?.length ?? 0) === 0);
+  check(
+    'a retired decision is kept, not deleted',
+    afterRetire.decisions?.length === 2,
+    `${afterRetire.decisions?.length}`,
+  );
+
+  console.log('\nDecisions travel with every AI request');
+  const withDecisions = await json('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      documentId: id,
+      blockId: blockIds[1],
+      question: 'Does this follow the agreed terminology?',
+    }),
+  });
+  const labels = (withDecisions.context?.parts ?? []).map((part) => part.label);
+  check('applicable decisions are sent', labels.includes('Decisions already taken'), labels.join(', '));
+  check(
+    'the last declared context gap is closed',
+    !(withDecisions.context?.omitted ?? []).some((entry) => entry.includes('Applicable decisions')),
+  );
+
+  console.log('\nA refused consequence stops recurring');
+  // Record a decision that settles a specific passage, then re-analyse.
+  const settle = analysed.impacts.find((impact) => impact.id !== finding?.id) ?? analysed.impacts[0];
+
+  await json(`/api/documents/${id}/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Do not propagate to this passage',
+      description: 'This passage uses the term in a different sense.',
+      scope: { type: 'node', nodeId: settle.targetBlockId },
+      source: 'impact_review',
+      suppressBlockId: settle.targetBlockId,
+      sourceImpactId: settle.id,
+    }),
+  });
+
+  // Make a fresh change so there is something to analyse again.
+  const reAnalyseBase = await json(`/api/documents/${id}`);
+  await json(`/api/documents/${id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      content: editBlock(
+        reAnalyseBase.content,
+        blockIds[2],
+        'The second paragraph, revised once more for supervisory control.',
+      ),
+      expectedRevision: reAnalyseBase.document.currentRevision,
+      changes: [
+        {
+          ...draft(
+            blockIds[2],
+            'unused',
+            'The second paragraph, revised once more for supervisory control.',
+          ),
+          classification: 'terminology',
+        },
+      ],
+    }),
+  });
+
+  const reAnalysed = await json(`/api/documents/${id}/impact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+
+  check(
+    'the settled passage is not put in front of the model again',
+    !reAnalysed.candidates?.some((candidate) => candidate.blockId === settle.targetBlockId),
+    settle.targetBlockId,
+  );
+  check(
+    'and the briefing says how many were suppressed',
+    typeof reAnalysed.analysis?.retrieval?.suppressedByDecisions === 'number',
+  );
+  check(
+    'no finding is raised about it',
+    !reAnalysed.impacts?.some((impact) => impact.targetBlockId === settle.targetBlockId),
+  );
+
   console.log('\nCleanup');
   const deleted = await api(`/api/documents/${id}`, { method: 'DELETE' });
   check('document deleted', deleted.status === 204);

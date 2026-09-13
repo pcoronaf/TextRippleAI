@@ -25,6 +25,7 @@ import type { ChangeProvenance, SuggestionRecord } from '@/core/types';
 import { getStore } from '@/store';
 
 import { briefsFor } from './briefs';
+import { asContextDecisions, decisionsForBlock } from './decisions';
 
 export class ImpactNotActionableError extends Error {
   constructor(message: string) {
@@ -90,6 +91,9 @@ export async function propagateImpact(
     question: instruction,
     recentChanges: ledger,
     briefs: await briefsFor(documentId, content, impact.targetBlockId),
+    decisions: asContextDecisions(
+      await decisionsForBlock(documentId, content, impact.targetBlockId),
+    ),
     resendSurroundings: true,
   });
 

@@ -543,3 +543,83 @@ conversation system, and the discussion lives with the consequence rather than i
 - **`discuss` scrolls to the passage to move the selection**, which is how the Ask panel learns
   which block is meant. It works, but it couples two panels through the editor selection rather
   than through state.
+
+---
+
+# M7 — Decision memory
+
+## Decisions
+
+### Suppression is deliberately narrow
+
+A decision silences an impact finding only when it names the same passage *and* the same
+vocabulary. The temptation is to let a decision silence a subject everywhere - and that is exactly
+how a memory feature becomes a way to stop hearing about real problems.
+
+A general preference ("prefer plain language") informs the model by travelling in the context. Only
+a decision that explicitly names a passage suppresses anything, and even then a finding about
+different vocabulary in that passage still gets through.
+
+### Suppression happens before reasoning
+
+A settled passage is dropped from the candidate list rather than filtered out of the findings. A
+decision not to propagate is an answer; paying a model to re-derive it, then showing the author
+something they already refused, is the failure this milestone exists to prevent. The briefing
+reports how many candidates were suppressed, so the saving is visible rather than silent.
+
+### Refusing is worth more than a status
+
+"No change needed" now offers to record *why*. The status alone settles one finding; the reason
+settles the question. This is the spec's own example - Chapter 8 discusses continuous monitoring, a
+separate concept - and it is the difference between a system that forgets and one that does not.
+
+Marking a finding settled without a reason is still available, and still one click.
+
+### Scope, and why `from_node` earns its place
+
+Three scopes: the whole document, one node and its section, or a node and everything after it.
+The third is the spec's example and the one that actually matches how long documents work - a
+terminology choice taken in Chapter 3 governs what follows without retroactively condemning
+Chapter 1.
+
+### Superseding happens in one write
+
+Recording a decision that replaces another marks the old one superseded in the same transaction.
+There is never a moment when both are in force, which matters because the conflict detector would
+otherwise report the replacement as contradicting what it replaced.
+
+### Conflicts are detected where a rule can be honest
+
+Two shapes are found locally: one decision preferring X over Y while another prefers Y over X, and
+two decisions replacing the same term with different words. Both are read from directional
+preference phrasing ("use X rather than Y"), which is the form a terminology decision almost always
+takes.
+
+Semantic contradiction that is not phrased as a preference is out of reach of a regular expression,
+and is not guessed at. Detection is advisory: it surfaces the pair and leaves the judgement to the
+author.
+
+### Nothing is ever deleted
+
+Retiring and superseding change a status. The reasoning behind a choice stays readable after the
+choice has moved on, which is the whole point of writing it down.
+
+## Deviations from the spec
+
+| Spec | Here | Why |
+|---|---|---|
+| `scope: { type: 'from_node', node_id }` | Also `document` and `node` | `from_node` alone cannot express "this section only", which is the common case when a decision is about one passage rather than a direction of travel. |
+| Conflict detection unspecified | Local detection of inverted and competing preferences | A model call per decision pair would cost more than the feature is worth at this size. The limitation is documented rather than hidden. |
+
+## Known limitations
+
+- **Conflict detection only reads preference phrasing.** Two decisions that contradict in substance
+  but not in the form "use X rather than Y" are not detected.
+- **Suppression matches on terms from the whole analysis**, not per finding: at the point candidates
+  are filtered the impact type is not yet known, so a decision naming a type narrows the finding
+  later rather than the candidate now.
+- **Decisions are not themselves indexed or embedded.** Retrieval of applicable decisions is by
+  scope, not by relevance, so a document with very many document-scoped decisions would send all of
+  them and lean on the token budget to trim.
+- **A decision cannot yet be created directly from a conversation turn.** The source exists and the
+  API accepts it; the Ask panel has no button for it.

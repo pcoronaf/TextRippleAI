@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildOutline } from '@/core/document';
+import { searchDecisions, type DecisionConflict } from '@/core/decisions';
 import { useDocumentSession } from '@/editor/use-document-session';
 import type { TokenUsage } from '@/ai/types';
 import type {
@@ -14,6 +15,9 @@ import type {
   ImpactAnalysisRecord,
   ImpactRecord,
   ImpactStatusValue,
+  DecisionRecord,
+  DecisionScope,
+  DecisionStatus,
   SuggestionRecord,
   IndexStatusReport,
   RetrievalHit,
@@ -57,6 +61,11 @@ export function Workspace({
   const [impactError, setImpactError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<Record<string, SuggestionRecord>>({});
 
+  const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
+  const [conflicts, setConflicts] = useState<DecisionConflict[]>([]);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionQuery, setDecisionQuery] = useState('');
+
   const [indexStatus, setIndexStatus] = useState<IndexStatusReport | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,6 +92,14 @@ export function Workspace({
     );
     setIndexStatus(status);
   }, [hideTrivial, record.id, scope]);
+
+  const refreshDecisions = useCallback(async () => {
+    const response = await fetch(`/api/documents/${record.id}/decisions`);
+    if (!response.ok) return;
+    const body = await response.json();
+    setDecisions(body.decisions ?? []);
+    setConflicts(body.conflicts ?? []);
+  }, [record.id]);
 
   const refreshIndex = useCallback(async () => {
     setIndexBusy(true);
@@ -130,7 +147,8 @@ export function Workspace({
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshDecisions();
+  }, [refresh, refreshDecisions]);
 
   const onEditorChange = useCallback(
     (next: DocumentContent) => {
@@ -318,6 +336,49 @@ export function Workspace({
     [scrollToBlock],
   );
 
+
+  const createDecision = useCallback(
+    async (input: {
+      title: string;
+      description: string;
+      scope: DecisionScope;
+      source?: DecisionRecord['source'];
+      suppressBlockId?: string | null;
+      suppressTerms?: string[];
+      sourceImpactId?: string | null;
+    }) => {
+      setDecisionBusy(true);
+      try {
+        const response = await fetch(`/api/documents/${record.id}/decisions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+        if (response.ok) await refreshDecisions();
+      } finally {
+        setDecisionBusy(false);
+      }
+    },
+    [record.id, refreshDecisions],
+  );
+
+  const setDecisionStatus = useCallback(
+    async (decisionId: string, status: DecisionStatus) => {
+      setDecisionBusy(true);
+      try {
+        const response = await fetch(`/api/documents/${record.id}/decisions/${decisionId}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status }),
+        });
+        if (response.ok) await refreshDecisions();
+      } finally {
+        setDecisionBusy(false);
+      }
+    },
+    [record.id, refreshDecisions],
+  );
+
   const resolveImpact = useCallback(
     async (impactId: string, status: ImpactStatusValue) => {
       setImpactBusy(true);
@@ -338,6 +399,29 @@ export function Workspace({
       }
     },
     [record.id],
+  );
+
+  /**
+   * Turn a refusal into memory.
+   *
+   * The spec's example: the analysis says Chapter 8 should follow the same
+   * terminology change; the author says no, Chapter 8 is about something else.
+   * Recording that stops the next analysis raising it again - scoped to this
+   * passage alone, rather than silencing the subject everywhere.
+   */
+  const recordDecisionFromImpact = useCallback(
+    async (impact: ImpactRecord, reason: string) => {
+      await createDecision({
+        title: 'Do not propagate to this passage',
+        description: reason,
+        scope: { type: 'node', nodeId: impact.targetBlockId },
+        source: 'impact_review',
+        suppressBlockId: impact.targetBlockId,
+        sourceImpactId: impact.id,
+      });
+      await resolveImpact(impact.id, 'accepted_no_change');
+    },
+    [createDecision, resolveImpact],
   );
 
   const outline = useMemo(() => buildOutline(content), [content]);
@@ -450,6 +534,18 @@ export function Workspace({
               onAcceptProposal: (suggestionId) => void acceptProposal(suggestionId),
               onRejectProposal: (suggestionId) => void rejectProposal(suggestionId),
               onDiscuss: discussImpact,
+              onRecordDecision: recordDecisionFromImpact,
+            }}
+            decisions={{
+              decisions: decisionQuery ? searchDecisions(decisions, decisionQuery) : decisions,
+              conflicts,
+              busy: decisionBusy,
+              query: decisionQuery,
+              onQueryChange: setDecisionQuery,
+              onCreate: (input) => void createDecision(input),
+              onSetStatus: (decisionId, status) => void setDecisionStatus(decisionId, status),
+              anchorBlockId: selection?.blockId ?? null,
+              onSelectBlock: scrollToBlock,
             }}
           />
         </aside>

@@ -9,6 +9,7 @@ import {
   parseModifyResponse,
 } from '@/ai/prompts';
 import { briefsFor } from '@/server/briefs';
+import { asContextDecisions, decisionsForBlock } from '@/server/decisions';
 import { getStore } from '@/store';
 import { handleError } from '@/server/http';
 
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
       question: instruction,
       recentChanges: changes,
       briefs: await briefsFor(documentId, loaded.content, blockId),
+      decisions: asContextDecisions(await decisionsForBlock(documentId, loaded.content, blockId)),
       history,
       resendSurroundings: true,
       budgetTokens: typeof body.budgetTokens === 'number' ? body.budgetTokens : undefined,

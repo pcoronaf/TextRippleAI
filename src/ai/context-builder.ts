@@ -10,10 +10,10 @@
  *     document brief / section title / section brief / previous paragraph /
  *     selected paragraph / next paragraph / relevant decisions / request
  *
- * Two of those are not available yet and degrade rather than being faked:
- * hierarchical summaries arrive with M4, and decisions with M7. Until then the
- * structural path (title, chapter, section heading) stands in for the briefs,
- * and no decision is ever invented to fill the slot.
+ * Every part of that package now exists. What is missing on any given request -
+ * an index that has not caught up, a passage no decision covers - is named in
+ * the digest rather than silently absent, so a thin answer is legible as
+ * missing input rather than as a document with no structure.
  */
 
 import { chapterIndex, flattenBlocks } from '@/core/document';
@@ -89,6 +89,11 @@ export interface BuildContextInput {
    * document-level awareness without sending the manuscript.
    */
   briefs?: { document?: string; chapter?: string; section?: string };
+  /**
+   * Decisions in force for this passage. Persistent authorial intent, so the
+   * model does not re-propose something already settled.
+   */
+  decisions?: { title: string; description: string }[];
   budgetTokens?: number;
 }
 
@@ -167,6 +172,13 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
       candidates.push({ label: "The author's highlight", text: highlight, priority: 2 });
     }
 
+    const decisions = (input.decisions ?? [])
+      .map((decision) => `- ${decision.title}: ${decision.description}`)
+      .join('\n');
+    if (decisions.trim()) {
+      candidates.push({ label: 'Decisions already taken', text: decisions, priority: 1 });
+    }
+
     const changes = describeChanges(input.recentChanges ?? [], input.blockId);
     if (changes) {
       candidates.push({ label: 'Recent changes to this passage', text: changes, priority: 3 });
@@ -197,7 +209,9 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
   if (!isFollowUp && !included.some((entry) => entry.label.endsWith('brief'))) {
     omitted.push('Hierarchical summaries (none current in the index yet - refresh it)');
   }
-  omitted.push('Applicable decisions (built in M7)');
+  if (!isFollowUp && !included.some((entry) => entry.label === 'Decisions already taken')) {
+    omitted.push('Applicable decisions (none recorded for this passage)');
+  }
 
   const documentTokens = estimateTokens(blocks.map((entry) => entry.text).join(' '));
 
@@ -216,6 +230,7 @@ export function buildAskContext(input: BuildContextInput): BuiltContext {
     'Document brief',
     'Chapter brief',
     'Section brief',
+    'Decisions already taken',
     'Previous paragraph',
     'Selected text',
     "The author's highlight",

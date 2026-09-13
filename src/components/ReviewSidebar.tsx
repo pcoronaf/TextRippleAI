@@ -7,6 +7,7 @@ import type { ChangeRecord, ChangesSinceSummary, CheckpointRecord } from '@/core
 
 import { AskPanel, type AskPanelProps } from './AskPanel';
 import { DiffView } from './DiffView';
+import { DecisionsPanel, type DecisionsPanelProps } from './DecisionsPanel';
 import { ImpactPanel, type ImpactPanelProps } from './ImpactPanel';
 import { IndexPanel, type IndexPanelProps } from './IndexPanel';
 
@@ -29,6 +30,7 @@ export interface ReviewSidebarProps {
   ask: AskPanelProps;
   index: IndexPanelProps;
   impact: ImpactPanelProps;
+  decisions: DecisionsPanelProps;
 }
 
 const OPERATION_LABELS: Record<string, string> = {
@@ -70,14 +72,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
       {tab === 'ask' && <AskPanel {...props.ask} />}
       {tab === 'index' && <IndexPanel {...props.index} />}
       {tab === 'impact' && <ImpactPanel {...props.impact} />}
-      {tab === 'decisions' && (
-        <div className="panel">
-          <p className="panel-note">
-            Decision memory arrives in M7, so authorial reasoning outlives the conversation that
-            produced it.
-          </p>
-        </div>
-      )}
+      {tab === 'decisions' && <DecisionsPanel {...props.decisions} />}
     </>
   );
 }

@@ -12,11 +12,11 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 - M6 complete
+## Status: M0 - M7 complete
 
-This repository implements the first seven milestones — the document core, change intelligence,
+This repository implements the first eight milestones — the document core, change intelligence,
 selection-anchored conversation, controlled AI editing, a semantic index, impact analysis and
-controlled propagation.
+controlled propagation, and decision memory.
 **No LLM is called anywhere in the editing path, and no model output reaches the document without
 the author accepting it.** Both rules are enforced by a test over the dependency graph, not by
 convention.
@@ -30,7 +30,8 @@ convention.
 | **M4** | Semantic index: hierarchical summaries, pgvector embeddings, hybrid retrieval, staleness tracking | ✅ built |
 | **M5** | Impact analysis: clustering, candidate retrieval, ranked findings, impact briefing | ✅ built |
 | **M6** | Propagation: a finding becomes a reviewed proposal, traceable back to its cause | ✅ built |
-| M7–M8 | Decision memory, advanced document capabilities | not started |
+| **M7** | Decision memory: persistent authorial intent that stops the system re-asking | ✅ built |
+| M8 | Advanced document capabilities | not started |
 
 ### What works today
 
@@ -66,6 +67,10 @@ convention.
   Accepting writes a ledger entry marked `propagation`, and **`/trace`** walks the stored links back
   from that paragraph to the proposal, the finding, the analysis, and the original change that
   started the ripple. A propagated change is itself analysable, so the ripple can continue.
+- **Record a decision** when you refuse a consequence — "Chapter 8 discusses continuous monitoring,
+  a separate concept" — and the next analysis stops raising it, scoped to that passage rather than
+  silencing the subject. Decisions travel with every AI request, are searchable, can be superseded
+  or retired without being deleted, and contradictions between the ones in force are flagged.
 
 ---
 
@@ -192,6 +197,9 @@ GET    /api/documents/:id/impact/:aid      one briefing with its findings
 POST   /api/documents/:id/impacts/:iid     resolve a finding
 POST   /api/documents/:id/impacts/:iid/propose  draft an edit that resolves it (writes nothing)
 GET    /api/documents/:id/changes/:cid/trace    why this paragraph reads the way it does
+GET    /api/documents/:id/decisions         list, ?q= &status=; includes contradictions
+POST   /api/documents/:id/decisions         record one
+POST   /api/documents/:id/decisions/:did    edit or retire
 GET    /api/documents/:id/index            what the index holds and what is stale
 POST   /api/documents/:id/index            refresh whatever is stale
 GET    /api/documents/:id/search           hybrid retrieval, ?q= &mode= &limit=

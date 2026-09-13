@@ -433,6 +433,8 @@ export interface ImpactAnalysisRecord {
   retrieval: {
     blocksInDocument: number;
     candidatesConsidered: number;
+    /** Candidates a recorded decision had already settled. */
+    suppressedByDecisions?: number;
     /** Share of the document excluded before reasoning. */
     reductionPercent: number;
   };
@@ -510,4 +512,54 @@ export interface ChangeProvenance {
   analysis: ImpactAnalysisRecord | null;
   /** The ledger entries whose consequences this change addresses. */
   originChanges: ChangeRecord[];
+}
+
+// --------------------------------------------------------------------------
+// Decisions (M7)
+// --------------------------------------------------------------------------
+
+/**
+ * Where a decision holds.
+ *
+ * `from_node` is the spec's example: a terminology choice taken in Chapter 3
+ * that governs the rest of the document but not what precedes it.
+ */
+export type DecisionScope =
+  | { type: 'document'; nodeId?: null }
+  | { type: 'node'; nodeId: string }
+  | { type: 'from_node'; nodeId: string };
+
+export type DecisionStatus = 'accepted' | 'superseded' | 'retired';
+
+export type DecisionSource = 'manual' | 'conversation' | 'impact_review';
+
+/**
+ * Persistent authorial intent.
+ *
+ * Decisions exist so that reasoning does not disappear inside chat history, and
+ * so the system stops proposing something the author has already refused.
+ */
+export interface DecisionRecord {
+  id: string;
+  documentId: string;
+  title: string;
+  description: string;
+  scope: DecisionScope;
+  status: DecisionStatus;
+  source: DecisionSource;
+  /**
+   * What this decision settles. Narrow on purpose: a decision silences a
+   * finding only about the passage and vocabulary it names.
+   */
+  suppressBlockId: string | null;
+  suppressTerms: string[];
+  suppressImpactType: string | null;
+  /** Where the decision came from, when it came from somewhere. */
+  sourceImpactId: string | null;
+  sourceConversationId: string | null;
+  /** Set on the decision this one replaces. */
+  supersedesDecisionId: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }

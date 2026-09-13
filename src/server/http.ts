@@ -10,6 +10,7 @@ import {
   SuggestionStaleError,
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
+  DecisionNotFoundError,
 } from '@/store';
 
 /**
@@ -26,7 +27,11 @@ export function handleError(error: unknown): NextResponse {
   if (error instanceof ConversationNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
-  if (error instanceof ImpactAnalysisNotFoundError || error instanceof ImpactNotFoundError) {
+  if (
+    error instanceof ImpactAnalysisNotFoundError ||
+    error instanceof ImpactNotFoundError ||
+    error instanceof DecisionNotFoundError
+  ) {
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
   if (error instanceof SuggestionNotFoundError) {

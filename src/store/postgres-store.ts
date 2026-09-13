@@ -16,6 +16,7 @@ import {
   newChangeId,
   newCheckpointId,
   newConversationId,
+  newDecisionId,
   newDocumentId,
   newEmbeddingId,
   newImpactAnalysisId,
@@ -38,6 +39,10 @@ import type {
   DocumentWithContent,
   ImpactStatus,
   ConversationRecord,
+  DecisionRecord,
+  DecisionScope,
+  DecisionSource,
+  DecisionStatus,
   MessageRecord,
   MessageRole,
   EmbeddingRecord,
@@ -69,6 +74,7 @@ import {
   SuggestionStaleError,
   ImpactAnalysisNotFoundError,
   ImpactNotFoundError,
+  DecisionNotFoundError,
   type AcceptSuggestionInput,
   type AcceptSuggestionResult,
   type AppendMessageInput,
@@ -76,7 +82,9 @@ import {
   type CreateDocumentInput,
   type CreateSuggestionInput,
   type CompleteImpactAnalysisInput,
+  type CreateDecisionInput,
   type CreateImpactAnalysisInput,
+  type UpdateDecisionInput,
   type EmbeddingUpsert,
   type ListChangesOptions,
   type ListSuggestionsOptions,
@@ -1330,6 +1338,99 @@ export class PostgresStore implements Store {
     return toImpact(rows[0]);
   }
 
+  // ---- Decisions ----------------------------------------------------------
+
+  async createDecision(documentId: string, input: CreateDecisionInput): Promise<DecisionRecord> {
+    return this.transaction(async (client) => {
+      const inserted = await client.query(
+        `insert into decisions
+             (id, document_id, title, description, scope, status, source, suppress_block_id,
+              suppress_terms, suppress_impact_type, source_impact_id, source_conversation_id,
+              supersedes_decision_id, created_by)
+         values ($1, $2, $3, $4, $5, 'accepted', $6, $7, $8::text[], $9, $10, $11, $12, $13)
+         returning *`,
+        [
+          newDecisionId(),
+          documentId,
+          input.title,
+          input.description,
+          JSON.stringify(input.scope),
+          input.source,
+          input.suppressBlockId ?? null,
+          input.suppressTerms ?? [],
+          input.suppressImpactType ?? null,
+          input.sourceImpactId ?? null,
+          input.sourceConversationId ?? null,
+          input.supersedesDecisionId ?? null,
+          input.createdBy,
+        ],
+      );
+
+      // Superseding happens in the same transaction: there is never a moment
+      // where both the old and the new decision are in force.
+      if (input.supersedesDecisionId) {
+        await client.query(
+          `update decisions set status = 'superseded', updated_at = now()
+            where document_id = $1 and id = $2`,
+          [documentId, input.supersedesDecisionId],
+        );
+      }
+
+      return toDecision(inserted.rows[0]);
+    });
+  }
+
+  async getDecision(documentId: string, decisionId: string): Promise<DecisionRecord | null> {
+    const rows = await this.query('select * from decisions where document_id = $1 and id = $2', [
+      documentId,
+      decisionId,
+    ]);
+    return rows.length > 0 ? toDecision(rows[0]) : null;
+  }
+
+  async listDecisions(
+    documentId: string,
+    options: { statuses?: DecisionStatus[] } = {},
+  ): Promise<DecisionRecord[]> {
+    const values: unknown[] = [documentId];
+    let sql = 'select * from decisions where document_id = $1';
+
+    if (options.statuses?.length) {
+      values.push(options.statuses);
+      sql += ` and status = any ($${values.length}::text[])`;
+    }
+    sql += ' order by created_at desc';
+
+    return (await this.query(sql, values)).map(toDecision);
+  }
+
+  async updateDecision(
+    documentId: string,
+    decisionId: string,
+    input: UpdateDecisionInput,
+  ): Promise<DecisionRecord> {
+    const rows = await this.query(
+      `update decisions
+          set title       = coalesce($3, title),
+              description = coalesce($4, description),
+              scope       = coalesce($5::jsonb, scope),
+              status      = coalesce($6, status),
+              updated_at  = now()
+        where document_id = $1 and id = $2
+        returning *`,
+      [
+        documentId,
+        decisionId,
+        input.title ?? null,
+        input.description ?? null,
+        input.scope ? JSON.stringify(input.scope) : null,
+        input.status ?? null,
+      ],
+    );
+    if (rows.length === 0) throw new DecisionNotFoundError(decisionId);
+    return toDecision(rows[0]);
+  }
+
   async markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void> {
     if (changeIds.length === 0) return;
     await this.query(
@@ -1432,6 +1533,27 @@ function toImpact(row: Row): ImpactRecord {
     resolvedBy: row.resolved_by,
     resolvedAt: row.resolved_at ? toIso(row.resolved_at) : null,
     createdAt: toIso(row.created_at),
+  };
+}
+
+function toDecision(row: Row): DecisionRecord {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    title: row.title,
+    description: row.description,
+    scope: row.scope as DecisionScope,
+    status: row.status as DecisionStatus,
+    source: row.source as DecisionSource,
+    suppressBlockId: row.suppress_block_id,
+    suppressTerms: row.suppress_terms ?? [],
+    suppressImpactType: row.suppress_impact_type,
+    sourceImpactId: row.source_impact_id,
+    sourceConversationId: row.source_conversation_id,
+    supersedesDecisionId: row.supersedes_decision_id,
+    createdBy: row.created_by,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 

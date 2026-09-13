@@ -17,6 +17,10 @@ import type {
   DocumentNodeRecord,
   DocumentRecord,
   DocumentWithContent,
+  DecisionRecord,
+  DecisionScope,
+  DecisionSource,
+  DecisionStatus,
   DraftChange,
   EmbeddingRecord,
   EmbeddingType,
@@ -225,6 +229,53 @@ export interface Store {
 
   /** Mark ledger entries as having been through analysis. */
   markChangesAnalysed(documentId: string, changeIds: string[]): Promise<void>;
+
+  // ---- Decisions (M7) -----------------------------------------------------
+
+  createDecision(documentId: string, input: CreateDecisionInput): Promise<DecisionRecord>;
+  getDecision(documentId: string, decisionId: string): Promise<DecisionRecord | null>;
+  listDecisions(
+    documentId: string,
+    options?: { statuses?: DecisionStatus[] },
+  ): Promise<DecisionRecord[]>;
+  /**
+   * Edit, retire or supersede. A decision is never deleted - the reasoning
+   * behind a choice stays readable even once the choice has moved on.
+   */
+  updateDecision(
+    documentId: string,
+    decisionId: string,
+    input: UpdateDecisionInput,
+  ): Promise<DecisionRecord>;
+}
+
+export interface CreateDecisionInput {
+  title: string;
+  description: string;
+  scope: DecisionScope;
+  source: DecisionSource;
+  createdBy: string;
+  suppressBlockId?: string | null;
+  suppressTerms?: string[];
+  suppressImpactType?: string | null;
+  sourceImpactId?: string | null;
+  sourceConversationId?: string | null;
+  /** Marks the named decision superseded as part of the same write. */
+  supersedesDecisionId?: string | null;
+}
+
+export interface UpdateDecisionInput {
+  title?: string;
+  description?: string;
+  scope?: DecisionScope;
+  status?: DecisionStatus;
+}
+
+export class DecisionNotFoundError extends Error {
+  constructor(readonly decisionId: string) {
+    super(`Decision ${decisionId} not found`);
+    this.name = 'DecisionNotFoundError';
+  }
 }
 
 export interface CreateImpactAnalysisInput {
