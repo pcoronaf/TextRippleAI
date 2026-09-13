@@ -10,8 +10,11 @@ export interface CitationGroup {
   changedBlockIds: string[];
 }
 
+/** A stored comment plus whether the block it points at is still in the document. */
+export type AnchoredComment = CommentRecord & { orphaned?: boolean };
+
 export interface ReviewPanelProps {
-  comments: CommentRecord[];
+  comments: AnchoredComment[];
   citations: CitationGroup[];
   checkpoints: CheckpointRecord[];
   /** The review boundary both the marks and the citation check work from. */
@@ -131,9 +134,16 @@ export function ReviewPanel({
           <article key={comment.id} className={`comment comment-${comment.status}`}>
             <div className="change-head">
               <span className="chip">{comment.status}</span>
+              {comment.orphaned && (
+                <span className="chip" title="The passage this was written about has since been deleted.">
+                  orphaned
+                </span>
+              )}
               <button
                 className="block-id"
                 onClick={() => onSelectBlock(comment.blockId)}
+                disabled={comment.orphaned}
+                title={comment.orphaned ? 'This block is no longer in the document' : undefined}
                 style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0 }}
               >
                 {comment.blockId}

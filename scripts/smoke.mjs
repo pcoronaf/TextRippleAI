@@ -1100,6 +1100,52 @@ async function main() {
 
   await api(`/api/documents/${extrasId}`, { method: 'DELETE' });
 
+  console.log('\nOrphaned comment anchors');
+  const orphanDoc = await json('/api/documents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Orphan check',
+      content: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'The passage under review.' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'A paragraph that survives.' }] },
+        ],
+      },
+    }),
+  });
+  const orphanId = orphanDoc.document.id;
+  {
+    const loaded = await json(`/api/documents/${orphanId}`);
+    const blocks = loaded.content.content;
+
+    await json(`/api/documents/${orphanId}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ blockId: blocks[0].attrs.id, body: 'Is this still needed?' }),
+    });
+
+    const before = await json(`/api/documents/${orphanId}/comments`);
+    check('a live anchor is not reported as orphaned', before.comments[0]?.orphaned === false);
+
+    // Delete the commented block.
+    await json(`/api/documents/${orphanId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: { ...loaded.content, content: blocks.slice(1) },
+        expectedRevision: loaded.document.currentRevision,
+        changes: [],
+      }),
+    });
+
+    const after = await json(`/api/documents/${orphanId}/comments`);
+    check('the comment outlives the block it pointed at', after.comments.length === 1);
+    check('and is reported as orphaned', after.comments[0]?.orphaned === true);
+  }
+  await api(`/api/documents/${orphanId}`, { method: 'DELETE' });
+
   console.log('\nSettings');
   const settingsBefore = await json('/api/settings');
   check('settings report the selected provider', typeof settingsBefore.selected === 'string');

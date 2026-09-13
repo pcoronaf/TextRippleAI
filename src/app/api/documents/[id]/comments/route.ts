@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { flattenBlocks } from '@/core/document';
 import { getStore } from '@/store';
 import { CURRENT_USER_ID, handleError } from '@/server/http';
 import type { CommentStatus } from '@/core/types';
@@ -17,11 +18,24 @@ export async function GET(request: Request, { params }: Context) {
       STATUSES.includes(value as CommentStatus),
     );
 
+    const store = getStore();
+    const comments = await store.listComments(id, {
+      blockId: query.get('blockId') ?? undefined,
+      statuses: statuses.length > 0 ? statuses : undefined,
+    });
+
+    // A comment is never deleted, so one whose block has been removed since
+    // outlives its anchor. It is still worth reading - it may be the reason the
+    // passage went - but showing it as though it still points at something is a
+    // lie, so the state is reported rather than hidden.
+    const loaded = await store.getDocument(id);
+    const present = new Set(loaded ? flattenBlocks(loaded.content).map((block) => block.id) : []);
+
     return NextResponse.json({
-      comments: await getStore().listComments(id, {
-        blockId: query.get('blockId') ?? undefined,
-        statuses: statuses.length > 0 ? statuses : undefined,
-      }),
+      comments: comments.map((comment) => ({
+        ...comment,
+        orphaned: !present.has(comment.blockId),
+      })),
     });
   } catch (error) {
     return handleError(error);

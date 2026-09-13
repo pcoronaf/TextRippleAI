@@ -107,6 +107,29 @@ describe('comments', () => {
     ).rejects.toBeInstanceOf(CommentNotFoundError);
   });
 
+  it('keeps a comment whose block has been deleted', async () => {
+    const { id, blocks } = await seed();
+    await store.createComment(id, { blockId: blocks[0].id, body: 'A note.', authorId: 'usr_test' });
+
+    // Delete the commented block. Nothing here removes the comment - the route
+    // that lists them reports the anchor as orphaned instead.
+    const loaded = await store.getDocument(id);
+    await store.saveDocument(id, {
+      content: { ...loaded!.content, content: loaded!.content.content.slice(1) },
+      expectedRevision: 1,
+      authorId: 'usr_test',
+      changes: [],
+    });
+
+    const remaining = await store.listComments(id);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].blockId).toBe(blocks[0].id);
+
+    const after = await store.getDocument(id);
+    const present = flattenBlocks(after!.content).map((block) => block.id);
+    expect(present).not.toContain(blocks[0].id);
+  });
+
   it('survives a document save', async () => {
     const { id, blocks } = await seed();
     await store.createComment(id, { blockId: blocks[0].id, body: 'A note.', authorId: 'usr_test' });

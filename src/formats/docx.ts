@@ -6,8 +6,9 @@
  * code blocks and horizontal rules.
  *
  * M8 adds footnotes and images. A footnote round-trips as a real Word footnote
- * and is tracked as a block of its own; an image keeps its source, though only
- * its alt text reaches Word, since embedding needs the bytes.
+ * and is tracked as a block of its own; an embedded image is written into the
+ * .docx as a real picture, and one whose bytes we cannot read - a linked image,
+ * or a format we do not measure - falls back to its alt text.
  *
  * Still out of scope: tracked changes and layout fidelity. Full Word fidelity
  * must not block the change-intelligence workflow, and the canonical
@@ -15,6 +16,7 @@
  */
 
 import { htmlToContent } from './html';
+import { decodeImage } from './image-data';
 import { flattenBlocks } from '@/core/document';
 import type { ContentNode, DocumentContent } from '@/core/types';
 
@@ -195,7 +197,7 @@ function renderInline(
   docx: DocxModule,
   context: RenderContext = { listLevel: 0 },
 ): any[] {
-  const { TextRun, ExternalHyperlink, FootnoteReferenceRun } = docx;
+  const { TextRun, ExternalHyperlink, FootnoteReferenceRun, ImageRun } = docx;
 
   // A run may be wrapped in a hyperlink or be a footnote marker, so the element
   // type is not uniform.
@@ -210,8 +212,22 @@ function renderInline(
     }
 
     if (node.type === 'image') {
-      // Word needs the bytes, which are only present for an embedded image.
-      // A linked one keeps its alt text so the prose still reads.
+      const decoded = decodeImage(node.attrs?.src);
+      if (decoded) {
+        return [
+          new ImageRun({
+            type: decoded.format,
+            data: decoded.data,
+            transformation: { width: decoded.width, height: decoded.height },
+            ...(typeof node.attrs?.alt === 'string' && node.attrs.alt
+              ? { altText: { name: node.attrs.alt, title: node.attrs.alt, description: node.attrs.alt } }
+              : {}),
+          }),
+        ];
+      }
+
+      // A linked image, or a format whose header we cannot read, keeps its alt
+      // text so the prose still reads rather than losing the reference.
       const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt : '';
       return alt ? [new TextRun({ text: alt, italics: true })] : [];
     }

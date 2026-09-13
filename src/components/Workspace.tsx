@@ -28,7 +28,7 @@ import { EditorPane, type EditorSelection } from './EditorPane';
 import type { Editor } from '@tiptap/react';
 import type { AskAction } from './AskPanel';
 import { ReviewSidebar, type SidebarTab } from './ReviewSidebar';
-import type { CitationGroup } from './ReviewPanel';
+import type { AnchoredComment, CitationGroup } from './ReviewPanel';
 import type { SettingsPanelProps, SettingsReport } from './SettingsPanel';
 
 /** Counted in the browser so the author can see the cost of what they asked for. */
@@ -72,7 +72,7 @@ export function Workspace({
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionQuery, setDecisionQuery] = useState('');
 
-  const [comments, setComments] = useState<CommentRecord[]>([]);
+  const [comments, setComments] = useState<AnchoredComment[]>([]);
   const [citations, setCitations] = useState<CitationGroup[]>([]);
   const [changedBlockIds, setChangedBlockIds] = useState<string[]>([]);
   const [since, setSince] = useState<string | null>(null);
