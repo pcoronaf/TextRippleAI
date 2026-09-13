@@ -188,6 +188,37 @@ describe('conflict detection', () => {
     ]);
   });
 
+  it('does not swallow the words that follow the term', () => {
+    // The case CI caught: a trailing adverb was being captured as part of the
+    // term, which made two contradicting decisions look unrelated.
+    expect(
+      extractPreferences("Use 'oversight' rather than 'supervisory control' everywhere."),
+    ).toEqual([{ preferred: 'oversight', rejected: 'supervisory control' }]);
+
+    expect(
+      extractPreferences("Use 'supervisory control' rather than 'oversight' in operational sections."),
+    ).toEqual([{ preferred: 'supervisory control', rejected: 'oversight' }]);
+
+    expect(extractPreferences('Use oversight rather than supervision throughout.')).toEqual([
+      { preferred: 'oversight', rejected: 'supervision' },
+    ]);
+  });
+
+  it('detects the contradiction between those two, phrased naturally', () => {
+    const conflicts = detectDecisionConflicts([
+      decision({
+        id: 'dec_a',
+        description: "Use 'supervisory control' rather than 'oversight' in operational sections.",
+      }),
+      decision({
+        id: 'dec_b',
+        description: "Use 'oversight' rather than 'supervisory control' everywhere.",
+      }),
+    ]);
+
+    expect(conflicts.map((conflict) => conflict.kind)).toContain('inverted');
+  });
+
   it('finds two decisions that contradict each other outright', () => {
     const conflicts = detectDecisionConflicts([
       decision({ id: 'dec_a', description: 'Use likelihood rather than probability.' }),

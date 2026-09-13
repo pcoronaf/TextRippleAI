@@ -95,9 +95,40 @@ export function decisionSuppresses(
  *
  * A directional preference is the form a terminology decision almost always
  * takes, and it is the form that can contradict another one outright.
+ *
+ * Two literal patterns rather than one built from strings: the quoted form is
+ * unambiguous, and the bare form needs a bounded word run. A single pattern
+ * with a lookahead for the sentence tail swallowed trailing words - "rather
+ * than 'X' everywhere" captured the adverb as part of the term - which made
+ * two contradicting decisions look unrelated.
  */
-const PREFERENCE =
-  /\b(?:use|prefer|say|write|adopt)\s+["'“]?([\p{L}\p{N} '’-]{2,40}?)["'”]?\s+(?:rather than|instead of|over|and not|not)\s+["'“]?([\p{L}\p{N} '’-]{2,40}?)["'”]?(?=[.,;:]|\s+(?:when|where|unless|in|for|throughout)\b|$)/giu;
+const QUOTED_PREFERENCE =
+  /\b(?:use|prefer|say|write|adopt)\s+["'“]([^"'”]{2,60})["'”]\s+(?:rather than|instead of|over|and not|not)\s+["'“]([^"'”]{2,60})["'”]/giu;
+
+const BARE_PREFERENCE =
+  /\b(?:use|prefer|say|write|adopt)\s+([\p{L}\p{N}][\p{L}\p{N}-]*(?:\s+[\p{L}\p{N}][\p{L}\p{N}-]*){0,3})\s+(?:rather than|instead of|over|and not|not)\s+([\p{L}\p{N}][\p{L}\p{N}-]*(?:\s+[\p{L}\p{N}][\p{L}\p{N}-]*){0,3})/giu;
+
+/** Adverbs that trail a bare term without being part of it. */
+const TRAILING_FILLER = new Set([
+  'everywhere',
+  'throughout',
+  'generally',
+  'always',
+  'consistently',
+  'instead',
+  'here',
+  'now',
+  'when',
+  'where',
+  'in',
+  'for',
+]);
+
+function cleanTerm(term: string): string {
+  let words = term.trim().toLowerCase().replace(/^["'“]|["'”]$/g, '').split(/\s+/);
+  while (words.length > 1 && TRAILING_FILLER.has(words[words.length - 1])) words = words.slice(0, -1);
+  return words.join(' ');
+}
 
 export interface Preference {
   preferred: string;
@@ -105,14 +136,25 @@ export interface Preference {
 }
 
 export function extractPreferences(text: string): Preference[] {
+  const seen = new Set<string>();
   const out: Preference[] = [];
 
-  for (const match of text.matchAll(PREFERENCE)) {
-    const preferred = match[1].trim().toLowerCase();
-    const rejected = match[2].trim().toLowerCase();
-    if (!preferred || !rejected || preferred === rejected) continue;
-    out.push({ preferred, rejected });
-  }
+  const collect = (pattern: RegExp) => {
+    for (const match of text.matchAll(pattern)) {
+      const preferred = cleanTerm(match[1]);
+      const rejected = cleanTerm(match[2]);
+      if (!preferred || !rejected || preferred === rejected) continue;
+
+      const key = `${preferred}=>${rejected}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ preferred, rejected });
+    }
+  };
+
+  // Quoted first: where the author marked the terms, take them as marked.
+  collect(QUOTED_PREFERENCE);
+  collect(BARE_PREFERENCE);
 
   return out;
 }
