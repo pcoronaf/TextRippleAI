@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { importDocx } from '@/formats/docx';
-import { retitleOnEdit, UNTITLED_DOCUMENT } from '@/core/document';
+import { ensureNodeIds, retitleOnEdit, UNTITLED_DOCUMENT } from '@/core/document';
 import type { DocumentContent } from '@/core/types';
 
 /**
@@ -80,10 +80,12 @@ describe('horizontal rules in a Word document', () => {
 });
 
 describe('a document keeps the title it was given', () => {
-  const content: DocumentContent = {
+  // Real content always arrives with ids assigned; the outline is built from
+  // flattened blocks, which are keyed by them.
+  const content: DocumentContent = ensureNodeIds({
     type: 'doc',
     content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Chapter 1' }] }],
-  };
+  }).content;
 
   it('does not rename a document on save', () => {
     // Importing Book_DRAFT.docx and then typing one character must not turn the
