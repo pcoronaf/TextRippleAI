@@ -12,10 +12,11 @@ wording change in Chapter 3 quietly invalidates a conclusion in Chapter 8.
 
 ---
 
-## Status: M0 - M5 complete
+## Status: M0 - M6 complete
 
-This repository implements the first six milestones — the document core, change intelligence,
-selection-anchored conversation, controlled AI editing, a semantic index, and impact analysis.
+This repository implements the first seven milestones — the document core, change intelligence,
+selection-anchored conversation, controlled AI editing, a semantic index, impact analysis and
+controlled propagation.
 **No LLM is called anywhere in the editing path, and no model output reaches the document without
 the author accepting it.** Both rules are enforced by a test over the dependency graph, not by
 convention.
@@ -28,7 +29,8 @@ convention.
 | **M3** | AI editing: proposals, diff review, accept/reject/discuss/revise, full provenance | ✅ built |
 | **M4** | Semantic index: hierarchical summaries, pgvector embeddings, hybrid retrieval, staleness tracking | ✅ built |
 | **M5** | Impact analysis: clustering, candidate retrieval, ranked findings, impact briefing | ✅ built |
-| M6–M8 | Propagation, decision memory, advanced document capabilities | not started |
+| **M6** | Propagation: a finding becomes a reviewed proposal, traceable back to its cause | ✅ built |
+| M7–M8 | Decision memory, advanced document capabilities | not started |
 
 ### What works today
 
@@ -60,6 +62,10 @@ convention.
   each with a severity, a confidence and a recommended action. Over 80% of the document is ruled
   out before the reasoning model sees anything. Nothing is edited; you resolve each finding
   yourself, and a dismissal is kept as review history.
+- **Act on a finding**: draft an edit that resolves it, reviewed as a diff like any other proposal.
+  Accepting writes a ledger entry marked `propagation`, and **`/trace`** walks the stored links back
+  from that paragraph to the proposal, the finding, the analysis, and the original change that
+  started the ripple. A propagated change is itself analysable, so the ripple can continue.
 
 ---
 
@@ -184,6 +190,8 @@ GET    /api/documents/:id/impact           past analyses
 POST   /api/documents/:id/impact           analyse accumulated changes (edits nothing)
 GET    /api/documents/:id/impact/:aid      one briefing with its findings
 POST   /api/documents/:id/impacts/:iid     resolve a finding
+POST   /api/documents/:id/impacts/:iid/propose  draft an edit that resolves it (writes nothing)
+GET    /api/documents/:id/changes/:cid/trace    why this paragraph reads the way it does
 GET    /api/documents/:id/index            what the index holds and what is stale
 POST   /api/documents/:id/index            refresh whatever is stale
 GET    /api/documents/:id/search           hybrid retrieval, ?q= &mode= &limit=

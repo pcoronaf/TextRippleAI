@@ -170,6 +170,7 @@ function toConversation(row: Row): ConversationRecord {
     selectionText: row.selection_text,
     title: row.title,
     relatedChangeId: row.related_change_id,
+    relatedImpactId: row.related_impact_id ?? null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -209,6 +210,7 @@ function toSuggestion(row: Row): SuggestionRecord {
     outputTokens: row.output_tokens,
     contextDigest: row.context_digest ?? null,
     parentSuggestionId: row.parent_suggestion_id,
+    sourceImpactId: row.source_impact_id ?? null,
     baseRevision: row.base_revision,
     changeId: row.change_id,
     resolvedBy: row.resolved_by,
@@ -562,8 +564,9 @@ export class PostgresStore implements Store {
   ): Promise<ConversationRecord> {
     const rows = await this.query(
       `insert into conversations
-           (id, document_id, anchor_block_id, selection_from, selection_to, selection_text, title)
-       values ($1, $2, $3, $4, $5, $6, $7)
+           (id, document_id, anchor_block_id, selection_from, selection_to, selection_text, title,
+            related_impact_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
        returning *`,
       [
         newConversationId(),
@@ -573,6 +576,7 @@ export class PostgresStore implements Store {
         input.selection?.to ?? null,
         input.selectionText,
         input.title,
+        input.relatedImpactId ?? null,
       ],
     );
     return toConversation(rows[0]);
@@ -666,8 +670,8 @@ export class PostgresStore implements Store {
            (id, document_id, block_id, conversation_id, instruction, before_content,
             proposed_content, rationale, selection_start, selection_end, status,
             provider, model, input_tokens, output_tokens, context_digest,
-            parent_suggestion_id, base_revision)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'generated', $11, $12, $13, $14, $15, $16, $17)
+            parent_suggestion_id, source_impact_id, base_revision)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'generated', $11, $12, $13, $14, $15, $16, $17, $18)
        returning *`,
       [
         newSuggestionRecordId(),
@@ -686,6 +690,7 @@ export class PostgresStore implements Store {
         input.outputTokens,
         input.contextDigest ? JSON.stringify(input.contextDigest) : null,
         input.parentSuggestionId,
+        input.sourceImpactId ?? null,
         input.baseRevision,
       ],
     );
@@ -830,7 +835,7 @@ export class PostgresStore implements Store {
              (id, document_id, block_id, block_type, author_id, source, operation, classification,
               before_content, after_content, before_hash, after_hash, session_id, revision,
               checkpoint_id, impact_status, prompt, model, suggestion_id, occurred_at, created_at)
-         values ($1, $2, $3, $4, $5, 'ai_accepted', 'replace', $6, $7, $8, $9, $10, $11, $12,
+         values ($1, $2, $3, $4, $5, $16, 'replace', $6, $7, $8, $9, $10, $11, $12,
                  null, 'pending', $13, $14, $15, now(), now())
          returning *`,
         [
@@ -856,6 +861,9 @@ export class PostgresStore implements Store {
           suggestion.instruction,
           model,
           suggestionId,
+          // A proposal written to resolve a finding is a propagation, not a
+          // plain AI edit - that distinction is what the trace reads.
+          suggestion.sourceImpactId ? 'propagation' : 'ai_accepted',
         ],
       );
 

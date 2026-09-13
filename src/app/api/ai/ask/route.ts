@@ -66,6 +66,25 @@ export async function POST(request: Request) {
       budgetTokens: typeof body.budgetTokens === 'number' ? body.budgetTokens : undefined,
     });
 
+    // Discussing an impact finding: the explanation travels with the question,
+    // so the author does not have to restate what the analysis already said.
+    const impact =
+      typeof body.impactId === 'string'
+        ? ((await store.listImpacts(documentId)).find((entry) => entry.id === body.impactId) ??
+          null)
+        : null;
+
+    const parts = impact
+      ? [
+          ...built.parts,
+          {
+            label: 'The impact analysis finding under discussion',
+            text: `${impact.severity} severity, ${impact.impactType.replace(/_/g, ' ')}: ${impact.explanation}`,
+            tokens: 0,
+          },
+        ]
+      : built.parts;
+
     // The model is called before anything is written, so a provider failure
     // cannot leave a dangling user turn in the conversation.
     let completion;
@@ -73,7 +92,7 @@ export async function POST(request: Request) {
       completion = await complete({
         system: ASK_SYSTEM,
         messages: buildAskMessages({
-          parts: built.parts,
+          parts,
           history: built.history,
           question,
         }),
@@ -95,6 +114,7 @@ export async function POST(request: Request) {
             : null,
         selectionText: built.selectedText,
         title: conversationTitle(question),
+        relatedImpactId: impact?.id ?? null,
       }));
 
     // Token counts live on the assistant turn only; the user turn carries the

@@ -470,3 +470,76 @@ should stop the next analysis proposing it again.
 - **The semantic arm has no similarity floor.** It contributes its top 40 neighbours regardless of
   how weak the match is, and on a short document that is most of what fills the candidate pool
   before ranking. A threshold needs tuning against a real embedding model rather than guessing.
+
+---
+
+# M6 — Propagation workflow
+
+## Decisions
+
+### A propagated edit gets no shortcut
+
+An edit the machine identified as necessary goes through exactly the same path as one the author
+asked for: an inert proposal, reviewed as a diff, accepted explicitly, applied server-side with a
+ledger entry. Being machine-identified is not evidence of being right - if anything it is the case
+where a shortcut would do the most damage, because the author never formed the intent themselves.
+
+`POST /impacts/:id/propose` therefore returns a suggestion, not a change.
+
+### The proposal is measured against the passage as it stands now
+
+The finding recorded the target text as it was when the analysis ran. The proposal records it as it
+is when the draft is made. Acceptance checks the second, so an author who edited the passage in
+between gets a stale-proposal refusal rather than having their work overwritten. The analysis being
+out of date is a weaker condition than the passage being out of date, and it is the passage that
+decides.
+
+### The smallest edit, not the best paragraph
+
+The propagation prompt extends the modify prompt with one instruction that matters: make the
+closest version to the original that is no longer inconsistent, not the best version of the
+paragraph. An author reviewing a propagated diff assumes everything in it was necessary; an
+unrequested improvement smuggled into that diff is harder to catch than one offered on its own.
+
+The prompt also explicitly permits returning the passage unchanged when the term is used in a
+different sense - which is the false positive impact analysis is most likely to produce.
+
+### `propagation` is a distinct source, not a flavour of `ai_accepted`
+
+The ledger entry records which it is, and that single field is what the trace reads to know there
+is a chain worth walking. Collapsing the two would have made "was this edit a consequence of
+something else" a question you answer by joining three tables hopefully.
+
+### Every hop in the trace is a stored link
+
+    change.suggestionId -> suggestion.sourceImpactId -> impact.sourceChangeIds -> the original changes
+
+Nothing is re-derived from the text, so the answer survives every later edit to any of the
+paragraphs involved. `GET /changes/:id/trace` walks it in one request, and degrades to a short chain
+for an ordinary manual change rather than erroring.
+
+### A propagated change is itself pending
+
+It is written with `impactStatus: 'pending'`, so the next analysis picks it up like any other
+change. That is what the spec means by new changes becoming impact-analysis inputs: the ripple
+continues until it stops producing consequences, rather than being cut off at one hop by
+construction.
+
+### Discussion reuses the conversation machinery
+
+Discussing a finding opens an ordinary conversation anchored to the passage, with the finding's
+explanation added as a context part and `related_impact_id` recorded on the conversation. No second
+conversation system, and the discussion lives with the consequence rather than in a chat log.
+
+## Known limitations
+
+- **One proposal per finding at a time.** A second request is refused until the first is rejected.
+  Revising a propagated proposal works through the ordinary revise path, which drops the impact
+  link on the replacement - a gap worth closing when M7 gives revisions a reason to keep it.
+- **The trace is one level deep in practice.** If a propagated change later causes its own finding,
+  each hop is traceable individually but nothing renders the whole chain as one view.
+- **Accepting several findings is one at a time**, each producing its own revision. A batch
+  acceptance covering several findings in one revision would be a better review unit.
+- **`discuss` scrolls to the passage to move the selection**, which is how the Ask panel learns
+  which block is meant. It works, but it couples two panels through the editor selection rather
+  than through state.

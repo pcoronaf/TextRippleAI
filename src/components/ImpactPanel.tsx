@@ -7,7 +7,10 @@ import type {
   ImpactAnalysisRecord,
   ImpactRecord,
   ImpactStatusValue,
+  SuggestionRecord,
 } from '@/core/types';
+
+import { SuggestionCard } from './SuggestionCard';
 
 export interface ImpactPanelProps {
   analysis: ImpactAnalysisRecord | null;
@@ -20,6 +23,12 @@ export interface ImpactPanelProps {
   onAnalyse: () => void;
   onResolve: (impactId: string, status: ImpactStatusValue) => void;
   onSelectBlock: (blockId: string) => void;
+  /** Proposals drafted to resolve a finding, keyed by impact id. */
+  proposals: Record<string, SuggestionRecord>;
+  onPropose: (impactId: string) => void;
+  onAcceptProposal: (suggestionId: string) => void;
+  onRejectProposal: (suggestionId: string) => void;
+  onDiscuss: (impact: ImpactRecord) => void;
 }
 
 const SEVERITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
@@ -67,6 +76,11 @@ export function ImpactPanel({
   onAnalyse,
   onResolve,
   onSelectBlock,
+  proposals,
+  onPropose,
+  onAcceptProposal,
+  onRejectProposal,
+  onDiscuss,
 }: ImpactPanelProps) {
   const [showResolved, setShowResolved] = useState(false);
 
@@ -204,11 +218,15 @@ export function ImpactPanel({
               {impact.status === 'pending' ? (
                 <div className="field-row" style={{ marginTop: 8, marginBottom: 0 }}>
                   <button
+                    className="primary"
                     disabled={busy}
-                    onClick={() => onResolve(impact.id, 'generate_suggestion')}
-                    title="Queued for a proposal; generating it arrives in M6"
+                    onClick={() => onPropose(impact.id)}
+                    title="Draft an edit that resolves this, for you to review"
                   >
-                    Act on this
+                    Draft a fix
+                  </button>
+                  <button disabled={busy} onClick={() => onDiscuss(impact)}>
+                    Discuss
                   </button>
                   <button disabled={busy} onClick={() => onResolve(impact.id, 'needs_review')}>
                     Review later
@@ -222,6 +240,20 @@ export function ImpactPanel({
                 </div>
               ) : (
                 <p className="suggestion-resolved">{STATUS_LABELS[impact.status]}</p>
+              )}
+
+              {/* The drafted edit, reviewed exactly like any other proposal. */}
+              {proposals[impact.id] && (
+                <div style={{ marginTop: 10 }}>
+                  <SuggestionCard
+                    suggestion={proposals[impact.id]}
+                    busy={busy}
+                    onAccept={() => onAcceptProposal(proposals[impact.id].id)}
+                    onReject={() => onRejectProposal(proposals[impact.id].id)}
+                    onDiscuss={() => onDiscuss(impact)}
+                    onRevise={() => undefined}
+                  />
+                </div>
               )}
             </article>
           ))}

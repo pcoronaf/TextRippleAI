@@ -183,6 +183,8 @@ export interface ConversationRecord {
   selectionText: string;
   title: string;
   relatedChangeId: string | null;
+  /** Set when the conversation is about an impact finding. */
+  relatedImpactId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -265,6 +267,14 @@ export interface SuggestionRecord {
   contextDigest: ContextDigest | null;
   /** Set when this proposal supersedes an earlier one. */
   parentSuggestionId: string | null;
+  /**
+   * The impact finding this proposal exists to resolve.
+   *
+   * Its presence is what makes the resulting ledger entry a propagation rather
+   * than a plain AI edit, and what lets the change be traced back to the change
+   * that caused it.
+   */
+  sourceImpactId: string | null;
   /** Document revision the proposal was generated against. */
   baseRevision: number;
   /** The ledger entry created on acceptance. */
@@ -474,4 +484,30 @@ export interface ImpactCandidate {
     lexicalRank: number | null;
     semanticRank: number | null;
   };
+}
+
+// --------------------------------------------------------------------------
+// Provenance (M6)
+// --------------------------------------------------------------------------
+
+/**
+ * Why a paragraph reads the way it does.
+ *
+ * The chain a propagated edit leaves behind:
+ *
+ *   change -> suggestion -> impact -> the changes that caused the impact
+ *
+ * Each hop is an explicit link rather than an inference, so the answer survives
+ * everything that happens to the document afterwards.
+ */
+export interface ChangeProvenance {
+  change: ChangeRecord;
+  /** The proposal the text came from, for an AI-assisted or propagated change. */
+  suggestion: SuggestionRecord | null;
+  /** The finding the proposal was written to resolve. */
+  impact: ImpactRecord | null;
+  /** The analysis that produced that finding. */
+  analysis: ImpactAnalysisRecord | null;
+  /** The ledger entries whose consequences this change addresses. */
+  originChanges: ChangeRecord[];
 }

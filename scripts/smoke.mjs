@@ -733,8 +733,78 @@ async function main() {
     ledgerAfter.changes.some((change) => change.impactStatus === 'analyzed'),
   );
 
+  console.log('\nPropagation: a finding becomes a reviewed proposal');
+  const actionable = analysed.impacts[0];
+  const revisionBeforePropagation = await revisionOf();
+
+  const proposed = await json(
+    `/api/documents/${id}/impacts/${actionable.id}/propose`,
+    { method: 'POST' },
+  );
+
+  check('a proposal was drafted', Boolean(proposed.suggestion?.id));
+  check('it points back at the finding', proposed.suggestion?.sourceImpactId === actionable.id);
+  check('it targets the passage the finding concerns', proposed.suggestion?.blockId === actionable.targetBlockId);
+  check('it records why it was asked for', Boolean(proposed.suggestion?.instruction));
+  check('the finding is marked as being acted on', proposed.impact?.status === 'generate_suggestion');
+  check(
+    'drafting a fix does not touch the document',
+    (await revisionOf()) === revisionBeforePropagation,
+  );
+
+  const secondAttempt = await api(`/api/documents/${id}/impacts/${actionable.id}/propose`, {
+    method: 'POST',
+  });
+  check('a second proposal for the same finding is refused', secondAttempt.status === 409);
+
+  const acceptedPropagation = await json(
+    `/api/documents/${id}/suggestions/${proposed.suggestion.id}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'accept', expectedRevision: revisionBeforePropagation }),
+    },
+  );
+
+  check('accepting it advanced the revision', acceptedPropagation.document.currentRevision > revisionBeforePropagation);
+  check(
+    'the ledger entry is a propagation, not a plain AI edit',
+    acceptedPropagation.change?.source === 'propagation',
+    acceptedPropagation.change?.source,
+  );
+  check(
+    'the propagated change can itself be analysed next time',
+    acceptedPropagation.change?.impactStatus === 'pending',
+  );
+
+  console.log('\nTracing a propagated change to its origin');
+  const trace = await json(
+    `/api/documents/${id}/changes/${acceptedPropagation.change.id}/trace`,
+  );
+
+  check('the trace reaches the proposal', trace.suggestion?.id === proposed.suggestion.id);
+  check('and the finding it resolved', trace.impact?.id === actionable.id);
+  check('and the analysis that produced it', trace.analysis?.id === analysis.id);
+  check(
+    'and the original changes whose consequences it addresses',
+    (trace.originChanges?.length ?? 0) > 0,
+    `${trace.originChanges?.length} origin change(s)`,
+  );
+  check(
+    'the origin change is one the author actually made',
+    trace.originChanges?.every((change) => change.source === 'human'),
+  );
+
+  const plainTrace = await json(
+    `/api/documents/${id}/changes/${trace.originChanges[0].id}/trace`,
+  );
+  check('a manual change traces to a short chain, not an error', plainTrace.suggestion === null);
+
   console.log('\nResolving a finding');
-  const dismissed = await json(`/api/documents/${id}/impacts/${finding.id}`, {
+  // A different finding from the one just propagated, so the two paths do not
+  // overwrite each other's state.
+  const dismissTarget = analysed.impacts[1] ?? analysed.impacts[0];
+  const dismissed = await json(`/api/documents/${id}/impacts/${dismissTarget.id}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ status: 'dismissed' }),
@@ -742,7 +812,7 @@ async function main() {
   check('a finding can be dismissed', dismissed.impact?.status === 'dismissed');
   check('and records who resolved it', Boolean(dismissed.impact?.resolvedAt));
 
-  const badStatus = await api(`/api/documents/${id}/impacts/${finding.id}`, {
+  const badStatus = await api(`/api/documents/${id}/impacts/${dismissTarget.id}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ status: 'invented' }),
@@ -751,7 +821,14 @@ async function main() {
 
   const reread = await json(`/api/documents/${id}/impact/${analysis.id}`);
   check('a briefing can be re-read later', reread.analysis?.id === analysis.id);
-  check('with its findings and their resolutions', reread.impacts?.[0]?.status === 'dismissed');
+  check(
+    'with its findings and their resolutions',
+    reread.impacts?.find((impact) => impact.id === dismissTarget.id)?.status === 'dismissed',
+  );
+  check(
+    'a dismissal is kept as review history rather than deleted',
+    reread.impacts?.length === analysed.impacts.length,
+  );
 
   const analyses = await json(`/api/documents/${id}/impact`);
   check('past analyses are listed', (analyses.analyses?.length ?? 0) >= 1);

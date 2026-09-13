@@ -14,6 +14,7 @@ import type {
   ImpactAnalysisRecord,
   ImpactRecord,
   ImpactStatusValue,
+  SuggestionRecord,
   IndexStatusReport,
   RetrievalHit,
 } from '@/core/types';
@@ -54,6 +55,7 @@ export function Workspace({
   const [impacts, setImpacts] = useState<ImpactRecord[]>([]);
   const [impactBusy, setImpactBusy] = useState(false);
   const [impactError, setImpactError] = useState<string | null>(null);
+  const [proposals, setProposals] = useState<Record<string, SuggestionRecord>>({});
 
   const [indexStatus, setIndexStatus] = useState<IndexStatusReport | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
@@ -143,6 +145,14 @@ export function Workspace({
     setTrigger({ action, nonce: Date.now() });
   }, []);
 
+  const scrollToBlock = useCallback((blockId: string) => {
+    const target = window.document.querySelector<HTMLElement>(`[data-id="${blockId}"]`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('block-highlight');
+    setTimeout(() => target.classList.remove('block-highlight'), 1600);
+  }, []);
+
   /**
    * Adopt a proposal the server has applied.
    *
@@ -201,6 +211,113 @@ export function Workspace({
     }
   }, [flushAndSave, record.id, refresh, scope]);
 
+  /** Draft an edit that resolves a finding. Writes nothing to the document. */
+  const proposeForImpact = useCallback(
+    async (impactId: string) => {
+      setImpactBusy(true);
+      setImpactError(null);
+      try {
+        const response = await fetch(
+          `/api/documents/${record.id}/impacts/${impactId}/propose`,
+          { method: 'POST' },
+        );
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? `Could not draft a fix (${response.status})`);
+
+        setProposals((previous) => ({ ...previous, [impactId]: body.suggestion }));
+        setImpacts((previous) =>
+          previous.map((impact) => (impact.id === impactId ? body.impact : impact)),
+        );
+      } catch (cause) {
+        setImpactError(cause instanceof Error ? cause.message : 'Could not draft a fix');
+      } finally {
+        setImpactBusy(false);
+      }
+    },
+    [record.id],
+  );
+
+  /** Accept a drafted fix through the ordinary suggestion path. */
+  const acceptProposal = useCallback(
+    async (suggestionId: string) => {
+      setImpactBusy(true);
+      setImpactError(null);
+      try {
+        const flushed = await flushAndSave();
+        if (!flushed) throw new Error('Save your pending edits before accepting');
+
+        const response = await fetch(
+          `/api/documents/${record.id}/suggestions/${suggestionId}/resolve`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'accept', expectedRevision: state.revision }),
+          },
+        );
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? `Could not accept (${response.status})`);
+
+        onAccepted(body.content, body.document.currentRevision);
+        setProposals((previous) => {
+          const next = { ...previous };
+          for (const [impactId, proposal] of Object.entries(next)) {
+            if (proposal.id === suggestionId) next[impactId] = body.suggestion;
+          }
+          return next;
+        });
+      } catch (cause) {
+        setImpactError(cause instanceof Error ? cause.message : 'Could not accept');
+      } finally {
+        setImpactBusy(false);
+      }
+    },
+    [flushAndSave, onAccepted, record.id, state.revision],
+  );
+
+  const rejectProposal = useCallback(
+    async (suggestionId: string) => {
+      setImpactBusy(true);
+      try {
+        const response = await fetch(
+          `/api/documents/${record.id}/suggestions/${suggestionId}/resolve`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'reject' }),
+          },
+        );
+        if (response.ok) {
+          const body = await response.json();
+          setProposals((previous) => {
+            const next = { ...previous };
+            for (const [impactId, proposal] of Object.entries(next)) {
+              if (proposal.id === suggestionId) next[impactId] = body.suggestion;
+            }
+            return next;
+          });
+        }
+      } finally {
+        setImpactBusy(false);
+      }
+    },
+    [record.id],
+  );
+
+  /**
+   * Take a finding into the Ask panel.
+   *
+   * Scrolling to the passage moves the editor selection there, which is what
+   * the Ask panel anchors to - so the conversation opens on the right block
+   * without a second mechanism for saying which one.
+   */
+  const discussImpact = useCallback(
+    (impact: ImpactRecord) => {
+      scrollToBlock(impact.targetBlockId);
+      setTab('ask');
+    },
+    [scrollToBlock],
+  );
+
   const resolveImpact = useCallback(
     async (impactId: string, status: ImpactStatusValue) => {
       setImpactBusy(true);
@@ -225,13 +342,6 @@ export function Workspace({
 
   const outline = useMemo(() => buildOutline(content), [content]);
 
-  const scrollToBlock = useCallback((blockId: string) => {
-    const target = window.document.querySelector<HTMLElement>(`[data-id="${blockId}"]`);
-    if (!target) return;
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    target.classList.add('block-highlight');
-    setTimeout(() => target.classList.remove('block-highlight'), 1600);
-  }, []);
 
   return (
     <div className="workspace">
@@ -335,6 +445,11 @@ export function Workspace({
               onAnalyse: () => void analyseImpact(),
               onResolve: (impactId, status) => void resolveImpact(impactId, status),
               onSelectBlock: scrollToBlock,
+              proposals,
+              onPropose: (impactId) => void proposeForImpact(impactId),
+              onAcceptProposal: (suggestionId) => void acceptProposal(suggestionId),
+              onRejectProposal: (suggestionId) => void rejectProposal(suggestionId),
+              onDiscuss: discussImpact,
             }}
           />
         </aside>

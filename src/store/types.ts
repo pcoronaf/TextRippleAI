@@ -319,6 +319,7 @@ export interface CreateSuggestionInput {
   outputTokens: number;
   contextDigest: ContextDigest | null;
   parentSuggestionId: string | null;
+  sourceImpactId?: string | null;
   baseRevision: number;
 }
 
@@ -376,6 +377,7 @@ export interface CreateConversationInput {
   anchorBlockId: string | null;
   selection: { from: number; to: number } | null;
   selectionText: string;
+  relatedImpactId?: string | null;
   title: string;
 }
 
