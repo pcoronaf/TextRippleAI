@@ -88,6 +88,11 @@ jobs:
 
       - run: npm ci
 
+      # The launcher and the packaging tests are the most platform-sensitive
+      # code here, and until now the suite only ever ran on Linux.
+      - name: Unit tests on Windows
+        run: npm test
+
       - name: Build the app
         run: npm run build
 

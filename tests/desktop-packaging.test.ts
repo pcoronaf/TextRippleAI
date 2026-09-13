@@ -3,20 +3,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-// The launcher is plain CommonJS with no dependencies, because it has to be a
-// single file to serve as a SEA entry point. The build script is ESM and is
-// loaded through a computed specifier so that `tsc` does not try to type a
-// .mjs file it has no declarations for.
+// Both halves of the zip handling are plain CommonJS with no dependencies -
+// the reader because a SEA entry point must be a single self-contained file,
+// the writer so that it can be loaded the same way here. `tsc` has no
+// declarations for either, which `createRequire` sidesteps without the dynamic
+// import that a TypeScript file would otherwise need.
 const launcher = require(path.join(here, '..', 'desktop', 'launcher.js'));
-const { createZip } = (await import(
-  pathToFileURL(path.join(here, '..', 'scripts', 'build-exe.mjs')).href
-)) as { createZip: (dir: string) => { archive: Buffer; fileCount: number } };
+const { createZip } = require(path.join(here, '..', 'desktop', 'zip-writer.js'));
 
 const root = mkdtempSync(path.join(tmpdir(), 'textripple-package-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
