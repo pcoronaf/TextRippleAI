@@ -16,16 +16,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
 
-      # No lockfile is committed yet, so `npm install` rather than `npm ci`.
-      - run: npm install
-
-      - name: Capture the resolved lockfile
-        uses: actions/upload-artifact@v7
-        with:
-          name: package-lock
-          path: package-lock.json
-          if-no-files-found: error
+      - run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
@@ -66,8 +59,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
 
-      - run: npm install
+      - run: npm ci
 
       - name: Apply migrations
         env:
@@ -90,8 +84,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
 
-      - run: npm install
+      - run: npm ci
 
       - name: Build the app
         run: npm run build

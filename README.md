@@ -97,6 +97,13 @@ It listens on the loopback address only, so it is not reachable from the network
 so SmartScreen will warn on first launch. Running it a second time finds the instance already
 running and reopens that browser tab rather than starting a second server over the same documents.
 
+Tagged versions are published as **[Releases](https://github.com/pcoronaf/TextRippleAI/releases)**
+with a permanent public link and a SHA-256 checksum; CI artifacts are the latest build from `main`
+and expire after 30 days.
+
+No database and no API key are needed to run it. To use a model, open the **Settings** tab and paste
+a key - see below.
+
 ```bash
 npm run build && npm run build:exe   # to build one yourself (Windows, Node 22+)
 ```
@@ -108,7 +115,7 @@ npm run build && npm run build:exe   # to build one yourself (Windows, Node 22+)
 Requires **Node 20+**. No database and no API key are needed to run it.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 

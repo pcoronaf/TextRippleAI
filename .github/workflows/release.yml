@@ -1,0 +1,81 @@
+name: Release
+
+# A CI artifact expires and needs a GitHub login to download. A release is a
+# permanent, public link - which is what you need to hand someone a binary.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows executable
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify before shipping
+        run: |
+          npm run typecheck
+          npm test
+
+      - run: npm run build
+
+      - run: npm run build:exe
+
+      # Nothing is published that has not been started at least once.
+      - name: Start the packaged app and check it answers
+        run: .\dist\TextRippleAI.exe --smoke
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+
+          $hash = (Get-FileHash dist\TextRippleAI.exe -Algorithm SHA256).Hash.ToLower()
+          $size = [math]::Round((Get-Item dist\TextRippleAI.exe).Length / 1MB, 1)
+
+          $notes = @(
+            "TextRippleAI $tag - Windows x64, single file, nothing to install.",
+            "",
+            "Download ``TextRippleAI.exe`` and double-click it. It starts the app and opens a",
+            "browser at http://127.0.0.1:3717. The Node runtime and the whole app travel inside",
+            "the binary; on first run it unpacks to ``%LOCALAPPDATA%\TextRippleAI`` and keeps your",
+            "documents there. To uninstall, delete that folder and the exe.",
+            "",
+            "It listens on loopback only. It is unsigned, so SmartScreen will warn on first",
+            "launch - verify it against the checksum below if you want to be sure of what you have.",
+            "",
+            "No database and no API key are needed. To use a model, open the Settings tab.",
+            "",
+            "| | |",
+            "|---|---|",
+            "| Size | $size MB |",
+            "| SHA-256 | ``$hash`` |",
+            "| Built from | ``${{ github.sha }}`` |"
+          ) -join "`n"
+
+          Set-Content -Path release-notes.md -Value $notes -Encoding utf8
+
+          gh release create $tag dist\TextRippleAI.exe `
+            --title "TextRippleAI $tag" `
+            --notes-file release-notes.md
