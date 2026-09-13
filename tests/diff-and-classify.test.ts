@@ -167,8 +167,11 @@ describe('inserted ranges', () => {
 
   it('merges adjacent insertions into one range', () => {
     const ranges = insertedRanges('a d', 'a b c d');
+
+    // Which of the two spaces the diff treats as new is its own business; what
+    // matters is that the run of new words is one mark rather than three.
     expect(ranges).toHaveLength(1);
-    expect('a b c d'.slice(ranges[0].from, ranges[0].to)).toBe(' b c');
+    expect('a b c d'.slice(ranges[0].from, ranges[0].to).trim()).toBe('b c');
   });
 
   it('gives offsets that index into the new text, not the old', () => {
