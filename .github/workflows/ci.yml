@@ -71,3 +71,36 @@ jobs:
         env:
           DATABASE_URL: postgres://textripple:textripple@localhost:5432/textripple
         run: npm run db:migrate
+
+  windows-exe:
+    name: Windows single-file executable
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Package it into one executable
+        run: npm run build:exe
+
+      # The point of this job: the packaged binary is started here, so a build
+      # that unpacks or boots wrong fails in CI rather than on a desktop.
+      - name: Start the packaged app and check it answers
+        run: .\dist\TextRippleAI.exe --smoke
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: TextRippleAI-windows-x64
+          path: dist/TextRippleAI.exe
+          if-no-files-found: error
+          retention-days: 30

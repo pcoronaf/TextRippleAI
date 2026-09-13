@@ -80,6 +80,29 @@ convention.
 
 ---
 
+## Run it on Windows without installing anything
+
+Every CI build produces a single `TextRippleAI.exe` — no Node, no npm, no database, no API key, no
+installer. Download it from the **Artifacts** section of the latest green
+[CI run](https://github.com/pcoronaf/TextRippleAI/actions/workflows/ci.yml) (`TextRippleAI-windows-x64`)
+and double-click it. It starts the app and opens a browser at <http://127.0.0.1:3717>; closing the
+console window stops it.
+
+The executable is a Node Single Executable Application: the Node runtime and the whole built app
+travel inside it. On first run it unpacks to `%LOCALAPPDATA%\TextRippleAI\app-<build>` and keeps
+your documents in `%LOCALAPPDATA%\TextRippleAI\data`, so nothing is written next to the exe and
+nothing touches the registry. To uninstall, delete that folder and the exe.
+
+It listens on the loopback address only, so it is not reachable from the network. It is unsigned,
+so SmartScreen will warn on first launch. Running it a second time finds the instance already
+running and reopens that browser tab rather than starting a second server over the same documents.
+
+```bash
+npm run build && npm run build:exe   # to build one yourself (Windows, Node 22+)
+```
+
+---
+
 ## Quick start
 
 Requires **Node 20+**. No database and no API key are needed to run it.
@@ -135,6 +158,7 @@ embedding model when a key is present, and otherwise falls back to a determinist
 | `npm test` | Unit tests (Vitest) |
 | `npm run db:migrate` | Apply `db/migrations/*.sql` (requires `DATABASE_URL`) |
 | `npm run smoke` | End-to-end check against a running server |
+| `npm run build:exe` | Package the built app into one Windows .exe (run after `npm run build`) |
 
 ---
 
