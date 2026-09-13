@@ -49,13 +49,19 @@ export async function POST(request: Request, { params }: Context) {
     const body = await request.json().catch(() => ({}));
 
     const blockId = typeof body.blockId === 'string' ? body.blockId : '';
+    const parentId = typeof body.parentId === 'string' && body.parentId ? body.parentId : undefined;
     const text = String(body.body ?? '').trim();
 
-    if (!blockId) return NextResponse.json({ error: 'blockId is required' }, { status: 400 });
+    // A reply takes its anchor from the comment it answers, so only a new
+    // thread has to name a block.
+    if (!blockId && !parentId) {
+      return NextResponse.json({ error: 'blockId or parentId is required' }, { status: 400 });
+    }
     if (!text) return NextResponse.json({ error: 'A comment body is required' }, { status: 400 });
 
     const comment = await getStore().createComment(id, {
       blockId,
+      parentId,
       body: text,
       authorId: CURRENT_USER_ID,
     });

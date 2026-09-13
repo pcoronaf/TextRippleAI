@@ -1346,13 +1346,28 @@ export class PostgresStore implements Store {
 
   async createComment(
     documentId: string,
-    input: { blockId: string; body: string; authorId: string },
+    input: { blockId: string; body: string; authorId: string; parentId?: string },
   ): Promise<CommentRecord> {
+    // A reply inherits its parent's anchor and attaches to the thread root, so
+    // a thread cannot be split across two blocks or nested without limit.
+    let blockId = input.blockId;
+    let parentId: string | null = null;
+
+    if (input.parentId) {
+      const parents = await this.query(
+        'select id, block_id, parent_id from comments where id = $1 and document_id = $2',
+        [input.parentId, documentId],
+      );
+      if (parents.length === 0) throw new CommentNotFoundError(input.parentId);
+      blockId = parents[0].block_id;
+      parentId = parents[0].parent_id ?? parents[0].id;
+    }
+
     const rows = await this.query(
-      `insert into comments (id, document_id, block_id, body, author_id)
-       values ($1, $2, $3, $4, $5)
+      `insert into comments (id, document_id, block_id, body, author_id, parent_id)
+       values ($1, $2, $3, $4, $5, $6)
        returning *`,
-      [newCommentId(), documentId, input.blockId, input.body, input.authorId],
+      [newCommentId(), documentId, blockId, input.body, input.authorId, parentId],
     );
     return toComment(rows[0]);
   }
@@ -1600,6 +1615,7 @@ function toComment(row: Row): CommentRecord {
     id: row.id,
     documentId: row.document_id,
     blockId: row.block_id,
+    parentId: row.parent_id ?? null,
     body: row.body,
     authorId: row.author_id,
     status: row.status as CommentStatus,

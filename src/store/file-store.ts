@@ -1096,17 +1096,25 @@ export class FileStore implements Store {
 
   async createComment(
     documentId: string,
-    input: { blockId: string; body: string; authorId: string },
+    input: { blockId: string; body: string; authorId: string; parentId?: string },
   ): Promise<CommentRecord> {
     return this.enqueue(documentId, async () => {
       const data = await this.read(documentId);
       if (!data) throw new DocumentNotFoundError(documentId);
 
       const now = new Date().toISOString();
+      // A reply inherits its parent's anchor, so a thread cannot end up split
+      // across two blocks by a caller passing the wrong one.
+      const parent = input.parentId
+        ? (data.comments ?? []).find((entry) => entry.id === input.parentId)
+        : undefined;
+      if (input.parentId && !parent) throw new CommentNotFoundError(input.parentId);
+
       const comment: CommentRecord = {
         id: newCommentId(),
         documentId,
-        blockId: input.blockId,
+        blockId: parent ? parent.blockId : input.blockId,
+        parentId: parent ? (parent.parentId ?? parent.id) : null,
         body: input.body,
         authorId: input.authorId,
         status: 'open',
@@ -1131,6 +1139,8 @@ export class FileStore implements Store {
     return (data.comments ?? [])
       .filter((entry) => !options.blockId || entry.blockId === options.blockId)
       .filter((entry) => !options.statuses || options.statuses.includes(entry.status))
+      // Records written before threading have no parent field at all.
+      .map((entry) => ({ ...entry, parentId: entry.parentId ?? null }))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 

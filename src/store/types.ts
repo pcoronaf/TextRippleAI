@@ -233,7 +233,7 @@ export interface Store {
 
   createComment(
     documentId: string,
-    input: { blockId: string; body: string; authorId: string },
+    input: { blockId: string; body: string; authorId: string; parentId?: string },
   ): Promise<CommentRecord>;
   listComments(
     documentId: string,

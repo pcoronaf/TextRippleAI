@@ -510,6 +510,24 @@ export function Workspace({
     [record.id, refreshReview],
   );
 
+  const addReply = useCallback(
+    async (parentId: string, body: string) => {
+      setReviewBusy(true);
+      try {
+        // No blockId: a reply takes its anchor from the comment it answers.
+        const response = await fetch(`/api/documents/${record.id}/comments`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ parentId, body }),
+        });
+        if (response.ok) await refreshReview();
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [record.id, refreshReview],
+  );
+
   const resolveComment = useCallback(
     async (commentId: string, status: CommentRecord['status']) => {
       setReviewBusy(true);
@@ -669,6 +687,7 @@ export function Workspace({
               busy: reviewBusy,
               onComment: (blockId, body) => void addComment(blockId, body),
               onResolveComment: (commentId, status) => void resolveComment(commentId, status),
+              onReply: (parentId, body) => void addReply(parentId, body),
               onSelectBlock: scrollToBlock,
             }}
           />

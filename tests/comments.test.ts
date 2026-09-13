@@ -145,3 +145,99 @@ describe('comments', () => {
     expect(await store.listComments(id)).toHaveLength(1);
   });
 });
+
+describe('comment threads', () => {
+  it('replies inherit the anchor of the comment they answer', async () => {
+    const { id, blocks } = await seed();
+    const root = await store.createComment(id, {
+      blockId: blocks[0].id,
+      body: 'Is "required" too strong?',
+      authorId: 'usr_test',
+    });
+
+    // Deliberately passing a different block: the reply must follow its parent,
+    // so a thread cannot end up split across two passages.
+    const reply = await store.createComment(id, {
+      blockId: blocks[1].id,
+      parentId: root.id,
+      body: 'Agreed, "expected" reads better.',
+      authorId: 'usr_other',
+    });
+
+    expect(reply.parentId).toBe(root.id);
+    expect(reply.blockId).toBe(blocks[0].id);
+  });
+
+  it('keeps threads one level deep', async () => {
+    const { id, blocks } = await seed();
+    const root = await store.createComment(id, {
+      blockId: blocks[0].id,
+      body: 'One.',
+      authorId: 'usr_test',
+    });
+    const first = await store.createComment(id, {
+      blockId: blocks[0].id,
+      parentId: root.id,
+      body: 'Two.',
+      authorId: 'usr_test',
+    });
+    const second = await store.createComment(id, {
+      blockId: blocks[0].id,
+      parentId: first.id,
+      body: 'Three.',
+      authorId: 'usr_test',
+    });
+
+    // Replying to a reply joins the same thread rather than nesting further.
+    expect(second.parentId).toBe(root.id);
+  });
+
+  it('reports an unknown parent', async () => {
+    const { id, blocks } = await seed();
+
+    await expect(
+      store.createComment(id, {
+        blockId: blocks[0].id,
+        parentId: 'cmt_missing',
+        body: 'Reply to nothing.',
+        authorId: 'usr_test',
+      }),
+    ).rejects.toBeInstanceOf(CommentNotFoundError);
+  });
+
+  it('opens a thread with no parent', async () => {
+    const { id, blocks } = await seed();
+    const root = await store.createComment(id, {
+      blockId: blocks[0].id,
+      body: 'A remark.',
+      authorId: 'usr_test',
+    });
+
+    expect(root.parentId).toBeNull();
+  });
+
+  it('resolving the thread does not touch its replies', async () => {
+    const { id, blocks } = await seed();
+    const root = await store.createComment(id, {
+      blockId: blocks[0].id,
+      body: 'Open question.',
+      authorId: 'usr_test',
+    });
+    await store.createComment(id, {
+      blockId: blocks[0].id,
+      parentId: root.id,
+      body: 'An answer.',
+      authorId: 'usr_test',
+    });
+
+    await store.setCommentStatus(id, root.id, { status: 'resolved', resolvedBy: 'usr_test' });
+
+    const all = await store.listComments(id);
+    const stored = all.find((entry) => entry.id === root.id);
+    const reply = all.find((entry) => entry.parentId === root.id);
+
+    // Resolution is a property of the thread, read from its root.
+    expect(stored?.status).toBe('resolved');
+    expect(reply?.status).toBe('open');
+  });
+});

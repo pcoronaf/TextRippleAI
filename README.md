@@ -74,9 +74,11 @@ convention.
 - **Footnotes and images** are first-class. A footnote is tracked as a block of its own, so editing
   a note is a recorded change and the note can be an impact target - while the paragraph's prose
   stays clean. Both round-trip through DOCX and Markdown.
-- **Comment** on a passage and resolve it, **mark what changed** since a checkpoint directly in the
-  document (drawn from the ledger, not a text diff), and review **citations**: every source, where
-  it is used, and which citing passages have moved on since you last looked.
+- **Comment** on a passage, reply in a thread and resolve it - a remark whose passage has since
+  been deleted is kept and shown as orphaned rather than silently pointing at nothing.
+- **Mark what changed** since a checkpoint directly in the document, drawn from the ledger rather
+  than a text diff, and review **citations**: every source, where it is used, and which citing
+  passages have moved on since you last looked.
 
 ---
 
@@ -251,8 +253,9 @@ GET    /api/documents/:id/changes/:cid/trace    why this paragraph reads the way
 GET    /api/documents/:id/decisions         list, ?q= &status=; includes contradictions
 POST   /api/documents/:id/decisions         record one
 POST   /api/documents/:id/decisions/:did    edit or retire
-GET    /api/documents/:id/comments          list, ?blockId= &status=
-POST   /api/documents/:id/comments          leave a remark on a passage
+GET    /api/documents/:id/comments          list, ?blockId= &status=; flags orphaned anchors
+POST   /api/documents/:id/comments          open a thread on a passage, or reply to one
+
 POST   /api/documents/:id/comments/:cid     resolve or reopen
 GET    /api/documents/:id/citations         every source, where used, what drifted
 GET    /api/documents/:id/index            what the index holds and what is stale

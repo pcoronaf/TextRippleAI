@@ -1128,6 +1128,23 @@ async function main() {
 
     const before = await json(`/api/documents/${orphanId}/comments`);
     check('a live anchor is not reported as orphaned', before.comments[0]?.orphaned === false);
+    check('a new comment opens a thread', before.comments[0]?.parentId === null);
+
+    // A reply names no block; it takes the anchor of what it answers.
+    const replied = await json(`/api/documents/${orphanId}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ parentId: before.comments[0].id, body: 'Yes, but reword it.' }),
+    });
+    check('a reply joins its parent thread', replied.comment.parentId === before.comments[0].id);
+    check('and inherits the anchor', replied.comment.blockId === blocks[0].attrs.id);
+
+    const anchorless = await api(`/api/documents/${orphanId}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'No block and no parent.' }),
+    });
+    check('a comment with neither a block nor a parent is rejected', anchorless.status === 400);
 
     // Delete the commented block.
     await json(`/api/documents/${orphanId}`, {
@@ -1141,8 +1158,11 @@ async function main() {
     });
 
     const after = await json(`/api/documents/${orphanId}/comments`);
-    check('the comment outlives the block it pointed at', after.comments.length === 1);
-    check('and is reported as orphaned', after.comments[0]?.orphaned === true);
+    check('the thread outlives the block it pointed at', after.comments.length === 2);
+    check(
+      'and every comment in it is reported as orphaned',
+      after.comments.every((comment) => comment.orphaned === true),
+    );
   }
   await api(`/api/documents/${orphanId}`, { method: 'DELETE' });
 

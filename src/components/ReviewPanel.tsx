@@ -27,6 +27,7 @@ export interface ReviewPanelProps {
   busy: boolean;
   onComment: (blockId: string, body: string) => void;
   onResolveComment: (commentId: string, status: CommentRecord['status']) => void;
+  onReply: (parentId: string, body: string) => void;
   onSelectBlock: (blockId: string) => void;
 }
 
@@ -50,13 +51,23 @@ export function ReviewPanel({
   busy,
   onComment,
   onResolveComment,
+  onReply,
   onSelectBlock,
 }: ReviewPanelProps) {
   const [body, setBody] = useState('');
   const [showResolved, setShowResolved] = useState(false);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  const [replyBody, setReplyBody] = useState('');
 
   const open = comments.filter((comment) => comment.status === 'open');
-  const shown = showResolved ? comments : open;
+
+  // A thread is its opening remark plus everything answering it. Resolution is
+  // a property of the thread, so the root's status decides whether it shows.
+  const roots = (showResolved ? comments : open).filter((comment) => !comment.parentId);
+  const threads = roots.map((root) => ({
+    root,
+    replies: comments.filter((comment) => comment.parentId === root.id),
+  }));
   const drifted = citations.filter((entry) => entry.changedBlockIds.length > 0);
 
   return (
@@ -125,39 +136,73 @@ export function ReviewPanel({
         </label>
       )}
 
-      {shown.length === 0 ? (
+      {threads.length === 0 ? (
         <p className="panel-note" style={{ marginTop: 12 }}>
           No comments yet.
         </p>
       ) : (
-        shown.map((comment) => (
-          <article key={comment.id} className={`comment comment-${comment.status}`}>
+        threads.map(({ root, replies }) => (
+          <article key={root.id} className={`comment comment-${root.status}`}>
             <div className="change-head">
-              <span className="chip">{comment.status}</span>
-              {comment.orphaned && (
+              <span className="chip">{root.status}</span>
+              {root.orphaned && (
                 <span className="chip" title="The passage this was written about has since been deleted.">
                   orphaned
                 </span>
               )}
+              {replies.length > 0 && (
+                <span className="chip">
+                  {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
+                </span>
+              )}
               <button
                 className="block-id"
-                onClick={() => onSelectBlock(comment.blockId)}
-                disabled={comment.orphaned}
-                title={comment.orphaned ? 'This block is no longer in the document' : undefined}
+                onClick={() => onSelectBlock(root.blockId)}
+                disabled={root.orphaned}
+                title={root.orphaned ? 'This block is no longer in the document' : undefined}
                 style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0 }}
               >
-                {comment.blockId}
+                {root.blockId}
               </button>
             </div>
-            <p className="comment-body">{comment.body}</p>
+            <p className="comment-body">{root.body}</p>
+
+            {replies.map((reply) => (
+              <p key={reply.id} className="comment-body comment-reply">
+                {reply.body}
+              </p>
+            ))}
+
             <div className="field-row" style={{ marginTop: 6, marginBottom: 0 }}>
+              <input
+                value={replyTo === root.id ? replyBody : ''}
+                placeholder="Reply..."
+                onFocus={() => setReplyTo(root.id)}
+                onChange={(event) => {
+                  setReplyTo(root.id);
+                  setReplyBody(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && replyBody.trim()) {
+                    onReply(root.id, replyBody.trim());
+                    setReplyBody('');
+                  }
+                }}
+              />
+              <button
+                disabled={busy || replyTo !== root.id || !replyBody.trim()}
+                onClick={() => {
+                  onReply(root.id, replyBody.trim());
+                  setReplyBody('');
+                }}
+              >
+                Reply
+              </button>
               <button
                 disabled={busy}
-                onClick={() =>
-                  onResolveComment(comment.id, comment.status === 'open' ? 'resolved' : 'open')
-                }
+                onClick={() => onResolveComment(root.id, root.status === 'open' ? 'resolved' : 'open')}
               >
-                {comment.status === 'open' ? 'Resolve' : 'Reopen'}
+                {root.status === 'open' ? 'Resolve' : 'Reopen'}
               </button>
             </div>
           </article>

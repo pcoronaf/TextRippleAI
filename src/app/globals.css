@@ -788,3 +788,11 @@ input[type='search'] {
   box-shadow: -10px 0 0 0 var(--insert-bg), inset 3px 0 0 0 var(--insert);
   border-radius: 2px;
 }
+
+/* A reply sits under the remark it answers, indented and quieter. */
+.comment-reply {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+}

@@ -581,6 +581,8 @@ export interface CommentRecord {
   id: string;
   documentId: string;
   blockId: string;
+  /** The comment this replies to, or null for the first remark in a thread. */
+  parentId: string | null;
   body: string;
   authorId: string;
   status: CommentStatus;
