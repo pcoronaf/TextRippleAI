@@ -7,6 +7,7 @@ import { propagationContext, propagationInstruction } from '@/ai/propagation-pro
 import { clusterChanges } from '@/core/cluster';
 import { ensureNodeIds, flattenBlocks } from '@/core/document';
 import { contentHash } from '@/core/hash';
+import { traceProvenance } from '@/core/provenance';
 import { FileStore } from '@/store';
 import type { DocumentContent, DraftChange, ImpactRecord } from '@/core/types';
 
@@ -51,6 +52,24 @@ function edit(content: DocumentContent, blockId: string, text: string): Document
     if (node.attrs?.id === blockId) node.content = [{ type: 'text', text }];
   }
   return next;
+}
+
+/**
+ * The trace, read from this test's own store.
+ *
+ * `traceChange` in the server layer resolves the process-wide store; the walk
+ * itself is pure, so it is exercised here against the records actually
+ * persisted. The wired version is covered end to end by the smoke test.
+ */
+async function trace_(documentId: string, changeId: string) {
+  const [changes, suggestions, impacts, analyses] = await Promise.all([
+    store.listChanges(documentId, { limit: 2000 }),
+    store.listSuggestions(documentId),
+    store.listImpacts(documentId),
+    store.listImpactAnalyses(documentId),
+  ]);
+
+  return traceProvenance({ changeId, changes, suggestions, impacts, analyses });
 }
 
 /** Build the full chain: a change, an analysis that found a consequence. */
@@ -241,7 +260,6 @@ describe('propagated proposals', () => {
   });
 
   it('traces a downstream change back to the change that caused it', async () => {
-    const { traceChange } = await import('@/server/propagate');
     const { id, blocks, originChange, impact, analysis } = await seedWithFinding();
 
     const suggestion = await store.createSuggestion(id, {
@@ -269,7 +287,7 @@ describe('propagated proposals', () => {
     });
 
     // The acceptance criterion: every hop is a stored link, not an inference.
-    const trace = await traceChange(id, change.id);
+    const trace = await trace_(id, change.id);
 
     expect(trace?.change.id).toBe(change.id);
     expect(trace?.suggestion?.id).toBe(suggestion.id);
@@ -280,10 +298,9 @@ describe('propagated proposals', () => {
   });
 
   it('traces an ordinary manual change to a short chain rather than failing', async () => {
-    const { traceChange } = await import('@/server/propagate');
     const { id, originChange } = await seedWithFinding();
 
-    const trace = await traceChange(id, originChange.id);
+    const trace = await trace_(id, originChange.id);
 
     expect(trace?.change.id).toBe(originChange.id);
     expect(trace?.suggestion).toBeNull();
@@ -292,9 +309,8 @@ describe('propagated proposals', () => {
   });
 
   it('returns nothing for a change that does not exist', async () => {
-    const { traceChange } = await import('@/server/propagate');
     const { id } = await seedWithFinding();
 
-    expect(await traceChange(id, 'chg_missing')).toBeNull();
+    expect(await trace_(id, 'chg_missing')).toBeNull();
   });
 });

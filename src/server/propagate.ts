@@ -20,6 +20,7 @@ import {
   propagationInstruction,
 } from '@/ai/propagation-prompt';
 import { clusterChanges } from '@/core/cluster';
+import { traceProvenance } from '@/core/provenance';
 import type { ChangeProvenance, SuggestionRecord } from '@/core/types';
 import { getStore } from '@/store';
 
@@ -158,8 +159,8 @@ export async function propagateImpact(
 /**
  * Walk a change back to its origin.
  *
- * Every hop is an explicit stored link, so the answer does not depend on
- * re-deriving anything from the text.
+ * The fetching lives here; the walk itself is `traceProvenance` in core, so the
+ * part with logic in it is testable without a store.
  */
 export async function traceChange(
   documentId: string,
@@ -167,27 +168,12 @@ export async function traceChange(
 ): Promise<ChangeProvenance | null> {
   const store = getStore();
 
-  const ledger = await store.listChanges(documentId, { limit: 2000 });
-  const change = ledger.find((entry) => entry.id === changeId);
-  if (!change) return null;
+  const [changes, suggestions, impacts, analyses] = await Promise.all([
+    store.listChanges(documentId, { limit: 2000 }),
+    store.listSuggestions(documentId),
+    store.listImpacts(documentId),
+    store.listImpactAnalyses(documentId),
+  ]);
 
-  const suggestion = change.suggestionId
-    ? await store.getSuggestion(documentId, change.suggestionId)
-    : null;
-
-  const impact = suggestion?.sourceImpactId
-    ? ((await store.listImpacts(documentId)).find(
-        (entry) => entry.id === suggestion.sourceImpactId,
-      ) ?? null)
-    : null;
-
-  const analysis = impact
-    ? ((await store.getImpactAnalysis(documentId, impact.impactAnalysisId))?.analysis ?? null)
-    : null;
-
-  const originChanges = impact
-    ? ledger.filter((entry) => impact.sourceChangeIds.includes(entry.id))
-    : [];
-
-  return { change, suggestion, impact, analysis, originChanges };
+  return traceProvenance({ changeId, changes, suggestions, impacts, analyses });
 }
