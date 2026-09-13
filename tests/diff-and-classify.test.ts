@@ -156,7 +156,13 @@ describe('inserted ranges', () => {
 
   it('reports nothing for a deletion, which occupies no space in the result', () => {
     // The removed words are not in the document, so there is nothing to mark.
-    expect(insertedRanges('Keep this and drop that.', 'Keep this.')).toEqual([]);
+    expect(insertedRanges('Alpha beta gamma.', 'Alpha gamma.')).toEqual([]);
+  });
+
+  it('marks a word that only gained punctuation, because it did change', () => {
+    // "this" becoming "this." is a different token, and the reviewer is being
+    // shown the text that is now there - which includes the new full stop.
+    expect(applied('Keep this and drop that.', 'Keep this.')).toEqual(['this.']);
   });
 
   it('merges adjacent insertions into one range', () => {
