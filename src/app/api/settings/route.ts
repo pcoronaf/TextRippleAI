@@ -10,7 +10,7 @@ import {
   type StoredProvider,
 } from '@/server/settings';
 
-const PROVIDERS: StoredProvider[] = ['anthropic', 'openai', 'mock'];
+const PROVIDERS: StoredProvider[] = ['anthropic', 'openai', 'bridge', 'mock'];
 
 /**
  * What is configured - never the keys themselves.

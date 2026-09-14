@@ -20,7 +20,7 @@ import path from 'node:path';
 
 import { setCredentialSource } from '@/ai/credentials';
 
-export type StoredProvider = 'anthropic' | 'openai' | 'mock';
+export type StoredProvider = 'anthropic' | 'openai' | 'bridge' | 'mock';
 
 export interface StoredSettings {
   provider?: StoredProvider;

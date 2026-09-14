@@ -144,7 +144,7 @@ on a real manuscript.
 The provider is selectable:
 
 ```bash
-AI_PROVIDER=anthropic     # anthropic | openai | mock (default)
+AI_PROVIDER=anthropic     # anthropic | openai | bridge | mock (default)
 ANTHROPIC_API_KEY=...
 # or
 AI_PROVIDER=openai

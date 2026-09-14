@@ -5,7 +5,7 @@ import { useState } from 'react';
 export type CredentialOrigin = 'environment' | 'settings' | 'none';
 
 export interface SettingsReport {
-  selected: 'anthropic' | 'openai' | 'mock';
+  selected: 'anthropic' | 'openai' | 'bridge' | 'mock';
   origins: { provider: CredentialOrigin; anthropicApiKey: CredentialOrigin; openaiApiKey: CredentialOrigin };
   providers: { provider: string; configured: boolean; models: Record<string, string>; detail?: string }[];
   stored: { provider: string | null; anthropicApiKey: boolean; openaiApiKey: boolean };
@@ -17,7 +17,7 @@ export interface SettingsPanelProps {
   report: SettingsReport | null;
   busy: boolean;
   onSave: (patch: {
-    provider?: 'anthropic' | 'openai' | 'mock';
+    provider?: 'anthropic' | 'openai' | 'bridge' | 'mock';
     anthropicApiKey?: string | null;
     openaiApiKey?: string | null;
   }) => Promise<void>;
@@ -111,7 +111,7 @@ export function SettingsPanel({ report, busy, onSave }: SettingsPanelProps) {
           <strong>Provider</strong>
         </label>
         <div className="field-row">
-          {(['mock', 'anthropic', 'openai'] as const).map((name) => (
+          {(['mock', 'anthropic', 'openai', 'bridge'] as const).map((name) => (
             <button
               key={name}
               className={report.selected === name ? 'primary' : undefined}

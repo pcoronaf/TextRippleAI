@@ -9,6 +9,7 @@
 
 import { credential, credentialOrigin, type CredentialOrigin } from './credentials';
 import { AnthropicProvider } from './providers/anthropic';
+import { BridgeProvider } from './providers/bridge';
 import { MockProvider } from './providers/mock';
 import { OpenAiProvider } from './providers/openai';
 import type {
@@ -21,11 +22,13 @@ import type {
 
 export * from './types';
 
-export type ProviderName = 'anthropic' | 'openai' | 'mock';
+export type ProviderName = 'anthropic' | 'openai' | 'bridge' | 'mock';
 
 function providerName(): ProviderName {
   const configured = (credential('AI_PROVIDER') ?? 'mock').toLowerCase();
-  if (configured === 'anthropic' || configured === 'openai') return configured;
+  if (configured === 'anthropic' || configured === 'openai' || configured === 'bridge') {
+    return configured;
+  }
   return 'mock';
 }
 
@@ -35,6 +38,8 @@ function createProvider(name: ProviderName): AiProvider {
       return new AnthropicProvider();
     case 'openai':
       return new OpenAiProvider();
+    case 'bridge':
+      return new BridgeProvider();
     default:
       return new MockProvider();
   }
@@ -81,7 +86,12 @@ export function gatewayStatus(): {
       anthropicApiKey: credentialOrigin('ANTHROPIC_API_KEY'),
       openaiApiKey: credentialOrigin('OPENAI_API_KEY'),
     },
-    providers: [new AnthropicProvider(), new OpenAiProvider(), new MockProvider()].map((provider) =>
+    providers: [
+      new AnthropicProvider(),
+      new OpenAiProvider(),
+      new BridgeProvider(),
+      new MockProvider(),
+    ].map((provider) =>
       provider.status(),
     ),
   };
