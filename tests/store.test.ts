@@ -233,3 +233,102 @@ describe('FileStore', () => {
     expect(await store.getDocument(created.document.id)).toBeNull();
   });
 });
+
+describe('batched index writes', () => {
+  it('writes many embeddings in one pass and reads them back', async () => {
+    const created = await store.createDocument({
+      content: ensureNodeIds({
+        type: 'doc',
+        content: Array.from({ length: 40 }, (_, i) => ({
+          type: 'paragraph',
+          content: [{ type: 'text', text: `Paragraph ${i} of the manuscript.` }],
+        })),
+      }).content,
+      authorId: 'usr_test',
+    });
+    const blocks = flattenBlocks(created.content);
+
+    const written = await store.upsertEmbeddings(
+      created.document.id,
+      blocks.map((block, i) => ({
+        nodeId: block.id,
+        embeddingType: 'block' as const,
+        vector: [i / 100, 1 - i / 100, 0.5],
+        contentHash: `sha256:${i}`,
+        sourceRevision: 1,
+        provider: 'mock',
+        model: 'mock-embedding',
+      })),
+    );
+
+    expect(written).toBe(blocks.length);
+    const stored = await store.listEmbeddings(created.document.id);
+    expect(stored).toHaveLength(blocks.length);
+    expect(new Set(stored.map((entry) => entry.nodeId)).size).toBe(blocks.length);
+  });
+
+  it('replaces rather than duplicating when the same blocks are written again', async () => {
+    const created = await store.createDocument({
+      content: ensureNodeIds({
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'One paragraph.' }] }],
+      }).content,
+      authorId: 'usr_test',
+    });
+    const [block] = flattenBlocks(created.content);
+    const input = {
+      nodeId: block.id,
+      embeddingType: 'block' as const,
+      vector: [1, 0, 0],
+      contentHash: 'sha256:first',
+      sourceRevision: 1,
+      provider: 'mock',
+      model: 'mock-embedding',
+    };
+
+    await store.upsertEmbeddings(created.document.id, [input]);
+    await store.upsertEmbeddings(created.document.id, [{ ...input, contentHash: 'sha256:second' }]);
+
+    const stored = await store.listEmbeddings(created.document.id);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].contentHash).toBe('sha256:second');
+  });
+
+  it('replaces the units of many blocks at once', async () => {
+    const created = await store.createDocument({
+      content: ensureNodeIds({
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'ISO/IEC 42001 is cited here.' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'And ISO 9001 over here.' }] },
+        ],
+      }).content,
+      authorId: 'usr_test',
+    });
+    const blocks = flattenBlocks(created.content);
+
+    const first = await store.replaceSemanticUnitsFor(
+      created.document.id,
+      blocks.map((block) => ({
+        nodeId: block.id,
+        units: [{ type: 'citation' as const, value: `cite-${block.id}`, context: '', rule: 'test' }],
+      })),
+      1,
+    );
+    expect(first).toBe(2);
+
+    // Writing again must replace, not accumulate.
+    await store.replaceSemanticUnitsFor(
+      created.document.id,
+      blocks.map((block) => ({
+        nodeId: block.id,
+        units: [{ type: 'citation' as const, value: `again-${block.id}`, context: '', rule: 'test' }],
+      })),
+      2,
+    );
+
+    const units = await store.listSemanticUnits(created.document.id);
+    expect(units).toHaveLength(2);
+    expect(units.every((unit) => unit.value.startsWith('again-'))).toBe(true);
+  });
+});

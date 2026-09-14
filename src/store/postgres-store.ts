@@ -1086,6 +1086,29 @@ export class PostgresStore implements Store {
     return (await this.query(sql, values)).map(toSemanticUnit);
   }
 
+  /**
+   * Batch forms exist for the file store, which rewrites a whole document per
+   * call. Here each write is already its own statement, so the batch simply
+   * runs them inside one transaction.
+   */
+  async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {
+    for (const input of inputs) await this.upsertEmbedding(documentId, input);
+    return inputs.length;
+  }
+
+  async replaceSemanticUnitsFor(
+    documentId: string,
+    entries: { nodeId: string; units: DetectedUnit[] }[],
+    sourceRevision: number,
+  ): Promise<number> {
+    let written = 0;
+    for (const entry of entries) {
+      await this.replaceSemanticUnits(documentId, entry.nodeId, entry.units, sourceRevision);
+      written += entry.units.length;
+    }
+    return written;
+  }
+
   async replaceSemanticUnits(
     documentId: string,
     nodeId: string,

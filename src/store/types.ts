@@ -178,6 +178,15 @@ export interface Store {
     options?: { statuses?: IndexStatus[]; nodeIds?: string[] },
   ): Promise<EmbeddingRecord[]>;
   upsertEmbedding(documentId: string, input: EmbeddingUpsert): Promise<EmbeddingRecord>;
+  /**
+   * Write a batch of embeddings as one operation.
+   *
+   * A store that keeps a document in a single file rewrites the whole thing per
+   * call, so indexing block by block is quadratic - 3516 blocks meant some
+   * 7000 rewrites of a 1.2 MB file. The batch exists so the cost is one write
+   * per batch rather than one per block.
+   */
+  upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number>;
 
   listSemanticUnits(
     documentId: string,
@@ -190,6 +199,12 @@ export interface Store {
     units: DetectedUnit[],
     sourceRevision: number,
   ): Promise<void>;
+  /** The same, for many blocks at once. See upsertEmbeddings. */
+  replaceSemanticUnitsFor(
+    documentId: string,
+    entries: { nodeId: string; units: DetectedUnit[] }[],
+    sourceRevision: number,
+  ): Promise<number>;
 
   /** Exact-terminology retrieval: full-text search where the engine has it. */
   searchText(documentId: string, query: string, limit: number): Promise<TextHit[]>;

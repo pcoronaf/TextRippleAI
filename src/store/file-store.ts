@@ -201,12 +201,43 @@ export class FileStore implements Store {
     }
   }
 
+  /** Windows fails a rename while anything else holds the destination open. */
+  private static readonly TRANSIENT_RENAME = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+  /**
+   * Replace the document file atomically.
+   *
+   * POSIX `rename()` over an existing path always succeeds. Windows does not:
+   * it fails with EPERM or EBUSY for as long as any other handle holds the
+   * destination open, which on a real machine means an antivirus scanner, a
+   * sync client or the search indexer having it for a few milliseconds.
+   *
+   * That is rare per write and certain in aggregate. Indexing a book rewrites
+   * this file thousands of times, and it failed 57 blocks into a 3516-block
+   * manuscript. Retrying briefly is the standard remedy, and the packaged
+   * desktop build - which uses this store by default and runs on Windows - is
+   * exactly where it matters.
+   */
   private async write(data: DocumentFile): Promise<void> {
     await fs.mkdir(this.root, { recursive: true });
     const target = this.file(data.document.id);
     const temp = `${target}.${process.pid}.tmp`;
     await fs.writeFile(temp, JSON.stringify(data, null, 2), 'utf8');
-    await fs.rename(temp, target);
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rename(temp, target);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? '';
+        if (!FileStore.TRANSIENT_RENAME.has(code) || attempt >= 10) {
+          // Leaving a stray .tmp behind would be mistaken for a document.
+          await fs.rm(temp, { force: true }).catch(() => undefined);
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+      }
+    }
   }
 
   /** Run `task` after any write already queued for this document. */
@@ -829,6 +860,89 @@ export class FileStore implements Store {
     return (data.semanticUnits ?? [])
       .filter((entry) => !options.nodeIds || options.nodeIds.includes(entry.nodeId))
       .filter((entry) => !options.types || options.types.includes(entry.unitType));
+  }
+
+  /**
+   * Write many embeddings in one read-modify-write.
+   *
+   * The singular form rewrites the whole document file, so calling it per block
+   * is quadratic in the size of the manuscript. This is the path indexing
+   * actually uses.
+   */
+  async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {
+    if (inputs.length === 0) return 0;
+
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      // Keyed lookup: scanning the list per input would put the quadratic cost
+      // back where it was just removed from.
+      const byKey = new Map(
+        (data.embeddings ?? []).map((entry) => [`${entry.nodeId}:${entry.embeddingType}`, entry]),
+      );
+
+      for (const input of inputs) {
+        const key = `${input.nodeId}:${input.embeddingType}`;
+        const existing = byKey.get(key);
+        byKey.set(key, {
+          id: existing?.id ?? newEmbeddingId(),
+          documentId,
+          nodeId: input.nodeId,
+          embeddingType: input.embeddingType,
+          vector: input.vector,
+          contentHash: input.contentHash,
+          sourceRevision: input.sourceRevision,
+          status: 'current',
+          provider: input.provider,
+          model: input.model,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        });
+      }
+
+      await this.write({ ...data, embeddings: [...byKey.values()] });
+      return inputs.length;
+    });
+  }
+
+  /** Replace the units of many blocks in one read-modify-write. */
+  async replaceSemanticUnitsFor(
+    documentId: string,
+    entries: { nodeId: string; units: DetectedUnit[] }[],
+    sourceRevision: number,
+  ): Promise<number> {
+    if (entries.length === 0) return 0;
+
+    return this.enqueue(documentId, async () => {
+      const data = await this.read(documentId);
+      if (!data) throw new DocumentNotFoundError(documentId);
+
+      const now = new Date().toISOString();
+      const replaced = new Set(entries.map((entry) => entry.nodeId));
+      const kept = (data.semanticUnits ?? []).filter((entry) => !replaced.has(entry.nodeId));
+
+      const added: SemanticUnitRecord[] = [];
+      for (const entry of entries) {
+        for (const unit of entry.units) {
+          added.push({
+            id: newSemanticUnitId(),
+            documentId,
+            nodeId: entry.nodeId,
+            unitType: unit.type,
+            value: unit.value,
+            context: unit.context,
+            rule: unit.rule,
+            sourceRevision,
+            createdAt: now,
+          });
+        }
+      }
+
+      await this.write({ ...data, semanticUnits: [...kept, ...added] });
+      return added.length;
+    });
   }
 
   async replaceSemanticUnits(

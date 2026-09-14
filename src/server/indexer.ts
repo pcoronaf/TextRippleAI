@@ -103,30 +103,37 @@ export async function refreshIndex(
       if (doEmbeddings) {
         const result = await embed(batch.map((entry) => entry.text));
 
-        for (const [index, entry] of batch.entries()) {
+        // Written as one batch. The file store rewrites the whole document per
+        // call, so writing these one at a time is quadratic in the size of the
+        // manuscript - it took roughly a second per block on a 3516-block book,
+        // and the repeated rewrites were what broke the atomic replace.
+        const vectors = batch.flatMap((entry, index) => {
           const vector = result.vectors[index];
-          if (!vector) continue;
+          return vector
+            ? [
+                {
+                  nodeId: entry.nodeId,
+                  embeddingType: 'block' as const,
+                  vector,
+                  contentHash: contentHash(entry.text),
+                  sourceRevision: revision,
+                  provider: result.provider,
+                  model: result.model,
+                },
+              ]
+            : [];
+        });
 
-          await store.upsertEmbedding(documentId, {
-            nodeId: entry.nodeId,
-            embeddingType: 'block',
-            vector,
-            contentHash: contentHash(entry.text),
-            sourceRevision: revision,
-            provider: result.provider,
-            model: result.model,
-          });
-          embeddingsWritten++;
-        }
+        embeddingsWritten += await store.upsertEmbeddings(documentId, vectors);
       }
 
       if (doUnits) {
         // Local pattern rules - no model call, so this is free.
-        for (const entry of batch) {
-          const units = extractSemanticUnits(entry.text);
-          await store.replaceSemanticUnits(documentId, entry.nodeId, units, revision);
-          semanticUnitsWritten += units.length;
-        }
+        semanticUnitsWritten += await store.replaceSemanticUnitsFor(
+          documentId,
+          batch.map((entry) => ({ nodeId: entry.nodeId, units: extractSemanticUnits(entry.text) })),
+          revision,
+        );
       }
     }
   }
