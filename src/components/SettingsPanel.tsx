@@ -6,9 +6,15 @@ export type CredentialOrigin = 'environment' | 'settings' | 'none';
 
 export interface SettingsReport {
   selected: 'anthropic' | 'openai' | 'bridge' | 'mock';
+  embeddings: 'anthropic' | 'openai' | 'bridge' | 'mock';
   origins: { provider: CredentialOrigin; anthropicApiKey: CredentialOrigin; openaiApiKey: CredentialOrigin };
   providers: { provider: string; configured: boolean; models: Record<string, string>; detail?: string }[];
-  stored: { provider: string | null; anthropicApiKey: boolean; openaiApiKey: boolean };
+  stored: {
+    provider: string | null;
+    embeddingProvider: string | null;
+    anthropicApiKey: boolean;
+    openaiApiKey: boolean;
+  };
   writable: boolean;
   file: string;
 }
@@ -18,6 +24,7 @@ export interface SettingsPanelProps {
   busy: boolean;
   onSave: (patch: {
     provider?: 'anthropic' | 'openai' | 'bridge' | 'mock';
+    embeddingProvider?: 'auto' | 'openai' | 'mock';
     anthropicApiKey?: string | null;
     openaiApiKey?: string | null;
   }) => Promise<void>;
@@ -127,6 +134,29 @@ export function SettingsPanel({ report, busy, onSave }: SettingsPanelProps) {
             ? 'The deterministic stub: answers are canned, nothing leaves this machine, and nothing is billed.'
             : `Requests are sent to ${report.selected}.`}{' '}
           {ORIGIN_NOTE[report.origins.provider]}.
+        </p>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'block', marginBottom: 4 }}>
+          <strong>Embeddings</strong>
+        </label>
+        <div className="field-row">
+          {(['auto', 'openai', 'mock'] as const).map((name) => (
+            <button
+              key={name}
+              className={(report.stored.embeddingProvider ?? 'auto') === name ? 'primary' : undefined}
+              onClick={() => save({ embeddingProvider: name }, `Embeddings set to ${name}.`)}
+              disabled={busy || !report.writable}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+        <p className="panel-note" style={{ marginTop: 4 }}>
+          Currently <strong>{report.embeddings}</strong>. Search and impact analysis compare vectors,
+          so an index built with one model cannot be queried with another - pin this rather than
+          letting it follow the provider, and rebuild the index if you change it.
         </p>
       </div>
 

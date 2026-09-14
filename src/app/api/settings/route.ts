@@ -8,9 +8,11 @@ import {
   settingsPath,
   writeSettings,
   type StoredProvider,
+  type StoredEmbeddingProvider,
 } from '@/server/settings';
 
 const PROVIDERS: StoredProvider[] = ['anthropic', 'openai', 'bridge', 'mock'];
+const EMBEDDING_PROVIDERS: StoredEmbeddingProvider[] = ['auto', 'openai', 'mock'];
 
 /**
  * What is configured - never the keys themselves.
@@ -26,10 +28,12 @@ export async function GET() {
 
     return NextResponse.json({
       selected: status.selected,
+      embeddings: status.embeddings,
       origins: status.origins,
       providers: status.providers,
       stored: {
         provider: stored.provider ?? null,
+        embeddingProvider: stored.embeddingProvider ?? null,
         anthropicApiKey: Boolean(stored.anthropicApiKey),
         openaiApiKey: Boolean(stored.openaiApiKey),
       },
@@ -58,6 +62,7 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as {
       provider?: unknown;
+      embeddingProvider?: unknown;
       anthropicApiKey?: unknown;
       openaiApiKey?: unknown;
     };
@@ -78,8 +83,21 @@ export async function POST(request: Request) {
       }
     }
 
+    if (body.embeddingProvider !== undefined && body.embeddingProvider !== null) {
+      if (
+        typeof body.embeddingProvider !== 'string' ||
+        !EMBEDDING_PROVIDERS.includes(body.embeddingProvider as StoredEmbeddingProvider)
+      ) {
+        return NextResponse.json(
+          { error: `embeddingProvider must be one of ${EMBEDDING_PROVIDERS.join(', ')}` },
+          { status: 400 },
+        );
+      }
+    }
+
     writeSettings({
       provider: body.provider as StoredProvider | null | undefined,
+      embeddingProvider: body.embeddingProvider as StoredEmbeddingProvider | null | undefined,
       anthropicApiKey: body.anthropicApiKey as string | null | undefined,
       openaiApiKey: body.openaiApiKey as string | null | undefined,
     });

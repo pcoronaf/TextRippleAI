@@ -17,7 +17,14 @@ import {
 const root = mkdtempSync(path.join(tmpdir(), 'textripple-settings-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-const ENV_KEYS = ['DATA_DIR', 'AI_PROVIDER', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'SETTINGS_READONLY'];
+const ENV_KEYS = [
+  'DATA_DIR',
+  'AI_PROVIDER',
+  'AI_EMBEDDING_PROVIDER',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'SETTINGS_READONLY',
+];
 let saved: Record<string, string | undefined>;
 let counter = 0;
 
@@ -155,5 +162,40 @@ describe('stored settings', () => {
     expect(origins.anthropicApiKey).toBe('settings');
     expect(origins.openaiApiKey).toBe('environment');
     expect(origins.provider).toBe('none');
+  });
+});
+
+describe('pinning where embeddings come from', () => {
+  it('follows the selected provider by default', () => {
+    writeSettings({ provider: 'openai', openaiApiKey: 'sk-openai' });
+    expect(gatewayStatus().embeddings).toBe('openai');
+  });
+
+  it('falls back to the stub when nothing can serve them', () => {
+    writeSettings({ provider: 'bridge' });
+    expect(gatewayStatus().embeddings).toBe('mock');
+  });
+
+  it('borrows OpenAI when the selected provider serves none but a key exists', () => {
+    writeSettings({ provider: 'bridge', openaiApiKey: 'sk-openai' });
+    expect(gatewayStatus().embeddings).toBe('openai');
+  });
+
+  it('can be pinned to the stub even with a key stored', () => {
+    // The case this exists for: a key that authenticates but has no credit, or
+    // an index already built with different vectors.
+    writeSettings({ provider: 'bridge', openaiApiKey: 'sk-openai', embeddingProvider: 'mock' });
+    expect(gatewayStatus().embeddings).toBe('mock');
+  });
+
+  it('can be pinned to OpenAI regardless of the selected provider', () => {
+    writeSettings({ provider: 'anthropic', embeddingProvider: 'openai' });
+    expect(gatewayStatus().embeddings).toBe('openai');
+  });
+
+  it('is overridden by the environment like everything else', () => {
+    writeSettings({ provider: 'bridge', openaiApiKey: 'sk-openai', embeddingProvider: 'mock' });
+    process.env.AI_EMBEDDING_PROVIDER = 'openai';
+    expect(gatewayStatus().embeddings).toBe('openai');
   });
 });

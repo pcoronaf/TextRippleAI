@@ -22,8 +22,11 @@ import { setCredentialSource } from '@/ai/credentials';
 
 export type StoredProvider = 'anthropic' | 'openai' | 'bridge' | 'mock';
 
+export type StoredEmbeddingProvider = 'auto' | 'openai' | 'mock';
+
 export interface StoredSettings {
   provider?: StoredProvider;
+  embeddingProvider?: StoredEmbeddingProvider;
   anthropicApiKey?: string;
   openaiApiKey?: string;
 }
@@ -31,6 +34,7 @@ export interface StoredSettings {
 /** Settings key for each environment variable the gateway looks up. */
 const BY_ENV_NAME: Record<string, keyof StoredSettings> = {
   AI_PROVIDER: 'provider',
+  AI_EMBEDDING_PROVIDER: 'embeddingProvider',
   ANTHROPIC_API_KEY: 'anthropicApiKey',
   OPENAI_API_KEY: 'openaiApiKey',
 };
@@ -81,6 +85,7 @@ export function readSettings(): StoredSettings {
  */
 export interface SettingsPatch {
   provider?: StoredProvider | null;
+  embeddingProvider?: StoredEmbeddingProvider | null;
   anthropicApiKey?: string | null;
   openaiApiKey?: string | null;
 }
@@ -96,6 +101,7 @@ export function writeSettings(patch: SettingsPatch): StoredSettings {
   }
 
   apply('provider', patch.provider);
+  apply('embeddingProvider', patch.embeddingProvider);
   apply('anthropicApiKey', patch.anthropicApiKey);
   apply('openaiApiKey', patch.openaiApiKey);
 

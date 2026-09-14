@@ -1178,6 +1178,7 @@ async function main() {
   const settingsBefore = await json('/api/settings');
   check('settings report the selected provider', typeof settingsBefore.selected === 'string');
   check('settings say where each value came from', typeof settingsBefore.origins?.provider === 'string');
+  check('settings report where embeddings come from', typeof settingsBefore.embeddings === 'string');
   check('no key is stored to begin with', settingsBefore.stored?.anthropicApiKey === false);
 
   const stored = await json('/api/settings', {
