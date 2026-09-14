@@ -587,7 +587,15 @@ async function main() {
     `/api/documents/${id}/search?q=${encodeURIComponent('badgers')}&mode=hybrid`,
   );
   check('hybrid search returns hits', (hybrid.hits?.length ?? 0) > 0);
-  check('hybrid search ran the semantic half', hybrid.semanticAvailable === true);
+  // CI runs on the deterministic stub, whose vectors are hash-derived, so the
+  // semantic half must be refused rather than fused in as though it meant
+  // something. That refusal is the behaviour worth asserting here.
+  check('the semantic half is refused on stub vectors', hybrid.semanticAvailable === false);
+  check(
+    'and the refusal says why',
+    typeof hybrid.semanticRefused === 'string' && /hash|stub/i.test(hybrid.semanticRefused),
+    hybrid.semanticRefused,
+  );
   check(
     'the lexical match still wins in the fused ranking',
     hybrid.hits?.[0]?.nodeId === blockIds[63],
