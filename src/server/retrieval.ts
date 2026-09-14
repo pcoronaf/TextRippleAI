@@ -13,7 +13,7 @@
  * formula per signal.
  */
 
-import { embed } from '@/ai/gateway';
+import { semanticArmFor } from './semantic-arm';
 import type { RetrievalHit } from '@/core/types';
 import { getStore } from '@/store';
 
@@ -44,6 +44,8 @@ export interface SearchResult {
   mode: RetrievalMode;
   /** Whether the semantic half actually ran. */
   semanticAvailable: boolean;
+  /** Why it did not, when it did not. Null when it ran or was not asked for. */
+  semanticRefused?: string | null;
 }
 
 export async function search(
@@ -65,13 +67,18 @@ export async function search(
 
   let semantic: Awaited<ReturnType<typeof store.searchVector>> = [];
   let semanticAvailable = false;
+  let semanticRefused: string | null = null;
 
   if (wantsSemantic) {
-    const embedded = await embed([trimmed]);
-    const vector = embedded.vectors[0];
-    if (vector?.length) {
-      semantic = await store.searchVector(documentId, vector, CANDIDATE_DEPTH);
+    const arm = await semanticArmFor(documentId, trimmed);
+    if (arm.usable) {
+      semantic = await store.searchVector(documentId, arm.vector, CANDIDATE_DEPTH);
       semanticAvailable = semantic.length > 0;
+    } else {
+      // Left out rather than down-weighted. A ranking from vectors that cannot
+      // be compared is noise, and blending noise in quietly is the failure this
+      // guard exists to prevent.
+      semanticRefused = arm.detail;
     }
   }
 
@@ -129,5 +136,5 @@ export async function search(
     .sort((a, b) => b.score - a.score || a.nodeId.localeCompare(b.nodeId))
     .slice(0, limit);
 
-  return { hits, mode, semanticAvailable };
+  return { hits, mode, semanticAvailable, semanticRefused };
 }

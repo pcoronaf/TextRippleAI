@@ -210,6 +210,12 @@ export interface Store {
   searchText(documentId: string, query: string, limit: number): Promise<TextHit[]>;
   /** Semantic retrieval over block embeddings. */
   searchVector(documentId: string, vector: number[], limit: number): Promise<VectorHit[]>;
+  /**
+   * Which model the stored block embeddings came from, or null if there are
+   * none. Retrieval needs this to refuse a query embedded by a different model,
+   * whose similarity scores would be arithmetic without meaning.
+   */
+  embeddingModel(documentId: string): Promise<{ provider: string; model: string } | null>;
 
   indexStatus(documentId: string): Promise<IndexStatusReport>;
 

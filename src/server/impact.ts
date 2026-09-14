@@ -15,7 +15,8 @@
  * M6, and it goes through the suggestion workflow like every other AI edit.
  */
 
-import { complete, embed } from '@/ai/gateway';
+import { complete } from '@/ai/gateway';
+import { semanticArmFor } from './semantic-arm';
 import {
   IMPACT_SYSTEM,
   buildImpactMessage,
@@ -63,17 +64,29 @@ export class NothingToAnalyseError extends Error {
 /**
  * How many passages reach the model.
  *
- * Proportional, with a ceiling and a floor. A fixed cap makes the spec's
- * reduction target an accident of document length: 30 passages rules out 97% of
- * a book and only half of a short paper, and on a short paper "retrieval" that
- * forwards half the document is not retrieval at all.
+ * Proportional, with a floor and a ceiling. A flat count makes the spec's
+ * reduction target an accident of document length, and on a short paper
+ * "retrieval" that forwards half the document is not retrieval at all.
  *
- * The ceiling keeps a long document's reasoning call affordable; the floor
- * keeps a very short one from being cut to nothing.
+ * The ceiling used to be 30, chosen when the failure worth guarding against was
+ * sending too much. On a book it became the only thing that mattered: 15% of
+ * 3515 blocks is 527, so every analysis saw exactly 30 passages, and the
+ * reported "99.1% reduction" described the ceiling rather than anything
+ * retrieval had done. It also quietly drained the meaning from a clean result -
+ * finding nothing says little when 0.9% of the document was examined.
+ *
+ * What actually has to be bounded is the cost of the reasoning call, and that
+ * is measured in characters rather than passages. So the count ceiling is now
+ * high enough for a long document to use, and a character budget does the real
+ * bounding. The floor still keeps a very short document from being cut to
+ * nothing.
  */
 const CANDIDATE_SHARE = 0.15;
-const MAX_CANDIDATES = 30;
+const MAX_CANDIDATES = 120;
 const MIN_CANDIDATES = 8;
+
+/** Roughly 30k tokens of candidate text - affordable on any reasoning model. */
+const MAX_CANDIDATE_CHARS = 120_000;
 
 /** Depth drawn from each retrieval arm before ranking. */
 const ARM_DEPTH = 40;
@@ -260,23 +273,37 @@ async function retrieveCandidates(
     });
   }
 
-  if (changedText.trim()) {
-    const embedded = await embed([changedText.slice(0, 4000)]);
-    const vector = embedded.vectors[0];
-    if (vector?.length) {
-      const semantic = await store.searchVector(documentId, vector, ARM_DEPTH);
-      semantic.forEach((hit, index) => {
-        const entry = ensure(hit.nodeId);
-        if (!entry) return;
-        entry.signals.semanticRank = index + 1;
-        entry.score += WEIGHTS.semantic * rank(index + 1, ARM_DEPTH);
-      });
-    }
+  // Dropped rather than down-weighted when the vectors cannot be compared: a
+  // ranking from hash-derived or mismatched vectors is noise, and blending it
+  // in at any weight corrupts a shortlist that looks perfectly normal.
+  const arm = await semanticArmFor(documentId, changedText.slice(0, 4000));
+  if (arm.usable) {
+    const semantic = await store.searchVector(documentId, arm.vector, ARM_DEPTH);
+    semantic.forEach((hit, index) => {
+      const entry = ensure(hit.nodeId);
+      if (!entry) return;
+      entry.signals.semanticRank = index + 1;
+      entry.score += WEIGHTS.semantic * rank(index + 1, ARM_DEPTH);
+    });
   }
 
-  return [...scores.values()]
-    .sort((a, b) => b.score - a.score || a.blockId.localeCompare(b.blockId))
-    .slice(0, limit);
+  const ranked = [...scores.values()].sort(
+    (a, b) => b.score - a.score || a.blockId.localeCompare(b.blockId),
+  );
+
+  // Two ceilings, because the cost of a shortlist is its characters and its
+  // usefulness is its count. Taking in rank order means the budget trims the
+  // weakest candidates rather than an arbitrary tail.
+  const chosen: ImpactCandidate[] = [];
+  let characters = 0;
+  for (const candidate of ranked) {
+    if (chosen.length >= limit) break;
+    if (chosen.length > 0 && characters + candidate.text.length > MAX_CANDIDATE_CHARS) break;
+    chosen.push(candidate);
+    characters += candidate.text.length;
+  }
+
+  return chosen;
 }
 
 /** Run the pipeline and record the briefing. */

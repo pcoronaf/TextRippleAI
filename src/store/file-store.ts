@@ -869,6 +869,12 @@ export class FileStore implements Store {
    * is quadratic in the size of the manuscript. This is the path indexing
    * actually uses.
    */
+  async embeddingModel(documentId: string): Promise<{ provider: string; model: string } | null> {
+    const data = await this.read(documentId);
+    const first = (data?.embeddings ?? []).find((entry) => entry.embeddingType === 'block');
+    return first ? { provider: first.provider, model: first.model } : null;
+  }
+
   async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {
     if (inputs.length === 0) return 0;
 

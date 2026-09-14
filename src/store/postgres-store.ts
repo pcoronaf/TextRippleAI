@@ -1091,6 +1091,14 @@ export class PostgresStore implements Store {
    * call. Here each write is already its own statement, so the batch simply
    * runs them inside one transaction.
    */
+  async embeddingModel(documentId: string): Promise<{ provider: string; model: string } | null> {
+    const rows = await this.query(
+      "select provider, model from embeddings where document_id =  and embedding_type = 'block' limit 1",
+      [documentId],
+    );
+    return rows.length > 0 ? { provider: rows[0].provider, model: rows[0].model } : null;
+  }
+
   async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {
     for (const input of inputs) await this.upsertEmbedding(documentId, input);
     return inputs.length;
