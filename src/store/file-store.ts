@@ -872,7 +872,10 @@ export class FileStore implements Store {
   async embeddingModel(documentId: string): Promise<{ provider: string; model: string } | null> {
     const data = await this.read(documentId);
     const first = (data?.embeddings ?? []).find((entry) => entry.embeddingType === 'block');
-    return first ? { provider: first.provider, model: first.model } : null;
+    // A record that never recorded its model cannot be verified against a
+    // query's model, and an unverifiable index is one that should not be
+    // trusted - 'unknown' matches nothing, which is the safe outcome.
+    return first ? { provider: first.provider ?? 'unknown', model: first.model ?? 'unknown' } : null;
   }
 
   async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {

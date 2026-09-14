@@ -1096,7 +1096,9 @@ export class PostgresStore implements Store {
       "select provider, model from embeddings where document_id =  and embedding_type = 'block' limit 1",
       [documentId],
     );
-    return rows.length > 0 ? { provider: rows[0].provider, model: rows[0].model } : null;
+    return rows.length > 0
+      ? { provider: rows[0].provider ?? 'unknown', model: rows[0].model ?? 'unknown' }
+      : null;
   }
 
   async upsertEmbeddings(documentId: string, inputs: EmbeddingUpsert[]): Promise<number> {
