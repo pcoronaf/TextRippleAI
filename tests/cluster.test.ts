@@ -179,9 +179,12 @@ describe('candidateLimitFor', () => {
     }
   });
 
-  it('caps the reasoning call on a long document', async () => {
+  it('still bounds the reasoning call on an enormous corpus', async () => {
     const { candidateLimitFor } = await import('@/server/impact');
-    expect(candidateLimitFor(100_000)).toBe(30);
+    // Raised from 30: on a book the ceiling was the only thing that ever bound,
+    // so the shortlist ignored document size and the reduction figure described
+    // the cap. A character budget now does the real bounding.
+    expect(candidateLimitFor(100_000)).toBe(120);
   });
 
   it('does not cut a very short document to nothing', async () => {

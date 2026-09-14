@@ -25,11 +25,6 @@ describe('how many passages reach the model', () => {
     expect(candidateLimitFor(100)).toBe(15);
   });
 
-  it('never cuts a very short document to nothing', () => {
-    expect(candidateLimitFor(1)).toBe(8);
-    expect(candidateLimitFor(0)).toBe(8);
-  });
-
   it('gives a book more than a pamphlet', () => {
     // The old ceiling of 30 meant a 3515-block manuscript and a 200-block paper
     // got an identical shortlist, and "99.1% reduction" described the cap.
@@ -38,9 +33,6 @@ describe('how many passages reach the model', () => {
     expect(candidateLimitFor(3515)).toBeGreaterThan(candidateLimitFor(400));
   });
 
-  it('still bounds the call on an enormous corpus', () => {
-    expect(candidateLimitFor(100_000)).toBe(120);
-  });
 });
 
 describe('refusing an untrustworthy semantic arm', () => {
