@@ -83,7 +83,15 @@ async function main() {
   console.log('\nAI gateway');
   const status = await json('/api/ai/status');
   check('reports a selected provider', typeof status.selected === 'string', status.selected);
-  check('lists all three adapters', status.providers?.length === 3);
+  // Named rather than counted: the point is that every adapter reports itself,
+  // and a bare count silently passes if one is swapped for another.
+  check(
+    'lists every adapter',
+    ['anthropic', 'openai', 'bridge', 'mock'].every((name) =>
+      status.providers?.some((entry) => entry.provider === name),
+    ),
+    (status.providers ?? []).map((entry) => entry.provider).join(', '),
+  );
 
   console.log('\nCreate and load');
   const created = await json('/api/documents', {
