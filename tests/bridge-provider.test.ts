@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resetCredentialSource, setCredentialSource } from '@/ai/credentials';
 import { BridgeProvider } from '@/ai/providers/bridge';
+import type { AiProvider } from '@/ai/types';
 import { getProvider } from '@/ai/gateway';
 
 const root = mkdtempSync(path.join(tmpdir(), 'textripple-bridge-'));
@@ -113,7 +114,10 @@ describe('the bridge provider', () => {
   it('serves no embeddings, so retrieval falls back rather than being faked', () => {
     // A vector cannot be produced by hand, and inventing one would look like it
     // worked while poisoning every similarity comparison.
-    expect(new BridgeProvider().embed).toBeUndefined();
+    // Typed through the interface, where embed is the optional member the
+    // gateway actually checks for before falling back.
+    const provider: AiProvider = new BridgeProvider();
+    expect(provider.embed).toBeUndefined();
   });
 
   it('is reachable through the gateway by name', () => {
