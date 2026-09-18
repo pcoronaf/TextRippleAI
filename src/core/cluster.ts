@@ -31,6 +31,7 @@ export function contentWords(text: string): string[] {
 export interface ChangeCluster {
   id: string;
   changeIds: string[];
+  /** The passages this change touched. A block belongs to exactly one cluster. */
   blockIds: string[];
   /** Most common classification among the members. */
   classification: ChangeClassification;
@@ -41,7 +42,11 @@ export interface ChangeCluster {
    * for: other places still saying what this change stopped saying.
    */
   terms: { removed: string[]; added: string[] };
-  /** Text of the changed passages after the edit, for semantic retrieval. */
+  /**
+   * Text of the changed passages as each edit left them, for semantic
+   * retrieval. This is history, not the present: a passage edited again since
+   * has moved on, so nothing may show these as what the document now says.
+   */
   afterText: string[];
   size: number;
 }
@@ -74,6 +79,22 @@ export function wordShift(before: string, after: string): { removed: string[]; a
 /** A focused swap is small on both sides - a term replaced, not a rewrite. */
 const SWAP_LIMIT = 3;
 
+/**
+ * The sweep this change belongs to, or null if it is not a focused swap.
+ *
+ * The key is the vocabulary shift itself, so the same swap made in forty
+ * paragraphs produces one key and therefore one conceptual change.
+ */
+function swapKey(shift: { removed: string[]; added: string[] }): string | null {
+  const focused =
+    shift.removed.length > 0 &&
+    shift.removed.length <= SWAP_LIMIT &&
+    shift.added.length <= SWAP_LIMIT;
+
+  if (!focused) return null;
+  return `swap:${[...shift.removed].sort().join('|')}=>${[...shift.added].sort().join('|')}`;
+}
+
 const quote = (words: string[]) => words.map((word) => `"${word}"`).join(', ');
 
 export interface ClusterOptions {
@@ -90,6 +111,14 @@ export interface ClusterOptions {
  *    swap, wherever it happened. This is the terminology sweep.
  * 2. Anything else clusters by block, so repeated work on one passage is one
  *    conceptual change rather than several.
+ *
+ * The rules are applied to a block's whole history since the review boundary,
+ * not to each ledger entry on its own. A paragraph that was swept and then also
+ * rewritten would otherwise land in two clusters at once, and downstream every
+ * cluster speaks about its passages in the present tense - so one passage would
+ * be described twice, in two different states, and at most one of them could be
+ * true. A block therefore joins the sweep only when the sweep is all that
+ * happened to it; anything more varied keeps the block whole.
  */
 export function clusterChanges(
   changes: readonly ChangeRecord[],
@@ -99,25 +128,27 @@ export function clusterChanges(
     (change) => options.includeTrivial || !isTrivial(change.classification),
   );
 
-  const groups = new Map<string, ChangeRecord[]>();
   const shifts = new Map<string, { removed: string[]; added: string[] }>();
+  const byBlock = new Map<string, ChangeRecord[]>();
 
   for (const change of considered) {
-    const shift = wordShift(change.before, change.after);
-    shifts.set(change.id, shift);
+    shifts.set(change.id, wordShift(change.before, change.after));
 
-    const focused =
-      shift.removed.length > 0 &&
-      shift.removed.length <= SWAP_LIMIT &&
-      shift.added.length <= SWAP_LIMIT;
+    const bucket = byBlock.get(change.blockId);
+    if (bucket) bucket.push(change);
+    else byBlock.set(change.blockId, [change]);
+  }
 
-    const key = focused
-      ? `swap:${[...shift.removed].sort().join('|')}=>${[...shift.added].sort().join('|')}`
-      : `block:${change.blockId}`;
+  const groups = new Map<string, ChangeRecord[]>();
+
+  for (const [blockId, blockChanges] of byBlock) {
+    const keys = new Set(blockChanges.map((change) => swapKey(shifts.get(change.id)!)));
+    const single = keys.size === 1 ? [...keys][0] : null;
+    const key = single ?? `block:${blockId}`;
 
     const bucket = groups.get(key);
-    if (bucket) bucket.push(change);
-    else groups.set(key, [change]);
+    if (bucket) bucket.push(...blockChanges);
+    else groups.set(key, [...blockChanges]);
   }
 
   return [...groups.entries()].map(([key, members]) => {
@@ -134,13 +165,17 @@ export function clusterChanges(
 
     const classification = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
     const terms = { removed: [...removed], added: [...added] };
+    const blockIds = [...new Set(members.map((change) => change.blockId))];
 
     return {
       id: key,
       changeIds: members.map((change) => change.id),
-      blockIds: [...new Set(members.map((change) => change.blockId))],
+      blockIds,
       classification,
-      label: labelFor(key, terms, members.length),
+      // A sweep is counted in passages, not in ledger entries: editing one
+      // paragraph twice is one place, and saying "2 places" would overstate how
+      // far through the document the change has reached.
+      label: labelFor(key, terms, { entries: members.length, places: blockIds.length }),
       terms,
       afterText: members.map((change) => change.after).filter(Boolean),
       size: members.length,
@@ -152,14 +187,15 @@ export function clusterChanges(
 function labelFor(
   key: string,
   terms: { removed: string[]; added: string[] },
-  size: number,
+  size: { entries: number; places: number },
 ): string {
   if (key.startsWith('swap:')) {
     if (terms.removed.length && terms.added.length) {
-      return `${quote(terms.removed)} → ${quote(terms.added)}${size > 1 ? ` (${size} places)` : ''}`;
+      const places = size.places > 1 ? ` (${size.places} places)` : '';
+      return `${quote(terms.removed)} → ${quote(terms.added)}${places}`;
     }
     if (terms.removed.length) return `Removed ${quote(terms.removed)}`;
     return `Added ${quote(terms.added)}`;
   }
-  return size > 1 ? `${size} edits to one passage` : 'One passage rewritten';
+  return size.entries > 1 ? `${size.entries} edits to one passage` : 'One passage rewritten';
 }

@@ -154,11 +154,41 @@ export function parseImpactReply(raw: string, candidateCount: number): ParsedImp
   return { summary, impacts };
 }
 
-/** Render the changes and the shortlist for the model. */
+/** How much of a changed passage the model is shown. */
+const NOW_READS_LIMIT = 400;
+
+/**
+ * One of the passages a change touched, as the document has it now.
+ *
+ * A sweep touches many passages and only the first is shown, as before: the
+ * changed passages are context, not the material the model is asked to judge,
+ * and the vocabulary that defines the sweep is already in the label.
+ */
+function nowReads(cluster: ChangeCluster, currentText: ReadonlyMap<string, string>): string {
+  const blockId = cluster.blockIds[0];
+  if (!blockId) return 'The changed passage can no longer be located.';
+  if (!currentText.has(blockId)) return `${blockId} has since been deleted from the document.`;
+
+  const text = currentText.get(blockId)!.trim();
+  if (!text) return `${blockId} is now empty.`;
+  return `${blockId} now reads: ${text.slice(0, NOW_READS_LIMIT)}`;
+}
+
+/**
+ * Render the changes and the shortlist for the model.
+ *
+ * What a changed passage now says is read from the document, never from the
+ * ledger. A ledger entry records what the passage said after *that* edit, which
+ * stops being true the moment it is edited again - and a model told a passage
+ * currently reads something it has not read for three edits will report
+ * findings about text that no longer exists.
+ */
 export function buildImpactMessage(input: {
   documentTitle: string;
   documentBrief?: string;
   clusters: ChangeCluster[];
+  /** Every block in the document as it stands now, keyed by ID. */
+  currentText: ReadonlyMap<string, string>;
   candidates: ImpactCandidate[];
   instructions?: string;
 }): string {
@@ -174,7 +204,7 @@ export function buildImpactMessage(input: {
         (cluster, index) =>
           `${index + 1}. ${cluster.label} [${cluster.classification}] - ${cluster.size} ledger ${
             cluster.size === 1 ? 'entry' : 'entries'
-          }\n   Now reads: ${cluster.afterText[0]?.slice(0, 400) ?? '(text removed)'}`,
+          }\n   ${nowReads(cluster, input.currentText)}`,
       )
       .join('\n')}`,
   );

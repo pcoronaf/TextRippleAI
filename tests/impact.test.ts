@@ -7,10 +7,41 @@ import {
 } from '@/ai/impact-prompt';
 import { clusterChanges } from '@/core/cluster';
 import { contentHash } from '@/core/hash';
-import type { ChangeRecord, ImpactCandidate } from '@/core/types';
+import type { ChangeClassification, ChangeRecord, ImpactCandidate } from '@/core/types';
 
 const reply = (impacts: unknown[], summary = 'A summary.') =>
   JSON.stringify({ summary, impacts });
+
+let counter = 0;
+
+const ledgerEntry = (
+  blockId: string,
+  before: string,
+  after: string,
+  classification: ChangeClassification = 'terminology',
+): ChangeRecord => ({
+  id: `chg_${++counter}`,
+  documentId: 'doc_1',
+  blockId,
+  blockType: 'paragraph',
+  authorId: 'usr_test',
+  source: 'human',
+  operation: 'replace',
+  classification,
+  before,
+  after,
+  beforeHash: contentHash(before),
+  afterHash: contentHash(after),
+  sessionId: 'sess_1',
+  revision: 2,
+  checkpointId: null,
+  impactStatus: 'pending',
+  prompt: null,
+  model: null,
+  suggestionId: null,
+  occurredAt: new Date().toISOString(),
+  createdAt: new Date().toISOString(),
+});
 
 describe('parseImpactReply', () => {
   it('reads a well-formed reply', () => {
@@ -110,29 +141,13 @@ describe('parseImpactReply', () => {
 });
 
 describe('buildImpactMessage', () => {
-  const change: ChangeRecord = {
-    id: 'chg_1',
-    documentId: 'doc_1',
-    blockId: 'p_1',
-    blockType: 'paragraph',
-    authorId: 'usr_test',
-    source: 'human',
-    operation: 'replace',
-    classification: 'terminology',
-    before: 'the probability of an incident',
-    after: 'the likelihood of an incident',
-    beforeHash: contentHash('a'),
-    afterHash: contentHash('b'),
-    sessionId: 'sess_1',
-    revision: 2,
-    checkpointId: null,
-    impactStatus: 'pending',
-    prompt: null,
-    model: null,
-    suggestionId: null,
-    occurredAt: new Date().toISOString(),
-    createdAt: new Date().toISOString(),
-  };
+  const change = ledgerEntry(
+    'p_1',
+    'the probability of an incident',
+    'the likelihood of an incident',
+  );
+
+  const currentText = new Map([['p_1', 'the likelihood of an incident']]);
 
   const candidates: ImpactCandidate[] = [
     {
@@ -155,6 +170,7 @@ describe('buildImpactMessage', () => {
     const message = buildImpactMessage({
       documentTitle: 'Governance',
       clusters: clusterChanges([change]),
+      currentText,
       candidates,
     });
 
@@ -166,6 +182,7 @@ describe('buildImpactMessage', () => {
     const message = buildImpactMessage({
       documentTitle: 'Governance',
       clusters: clusterChanges([change]),
+      currentText,
       candidates,
     });
 
@@ -179,10 +196,91 @@ describe('buildImpactMessage', () => {
       documentTitle: 'Governance',
       documentBrief: 'Sets out duties for high-risk systems.',
       clusters: clusterChanges([change]),
+      currentText,
       candidates,
     });
 
     expect(message).toContain('## Document brief');
     expect(message).toContain('Sets out duties for high-risk systems.');
+  });
+});
+
+/*
+ * What a changed passage now says.
+ *
+ * On a real manuscript a paragraph that had been swept and then rewritten was
+ * described twice, in two clusters, each saying "Now reads" and each quoting a
+ * different sentence. The second was history: the passage had not read that way
+ * for an edit. A model told a passage says something it does not can only
+ * produce a finding about text that is not there.
+ */
+describe('buildImpactMessage on a passage edited twice since the checkpoint', () => {
+  const ORIGINAL =
+    'Sunset is the moment at which the geometric sun is already wholly beneath the true horizon.';
+  const SWAPPED =
+    'Sunset is the moment at which the geometric sun is already wholly beneath the astronomical horizon.';
+  const CURRENT =
+    'Sunset is the moment at which the geometric sun has already passed wholly beneath the ' +
+    'astronomical horizon, refraction notwithstanding.';
+
+  const clusters = clusterChanges([
+    // A focused term swap, then a broader rewrite of the same paragraph.
+    ledgerEntry('p_wgjogypt60', ORIGINAL, SWAPPED, 'terminology'),
+    ledgerEntry('p_wgjogypt60', SWAPPED, CURRENT, 'editorial'),
+  ]);
+
+  const candidates: ImpactCandidate[] = [
+    {
+      blockId: 'p_77',
+      text: 'Civil twilight ends when the sun reaches six degrees below the horizon.',
+      score: 3,
+      signals: {
+        exactTerm: true,
+        definition: false,
+        crossReference: false,
+        citation: false,
+        numeric: false,
+        lexicalRank: 1,
+        semanticRank: null,
+      },
+    },
+  ];
+
+  const message = buildImpactMessage({
+    documentTitle: 'Twilight',
+    clusters,
+    currentText: new Map([
+      ['p_wgjogypt60', CURRENT],
+      ['p_77', candidates[0].text],
+    ]),
+    candidates,
+  });
+
+  const changesMade = message.split('## Candidate passages')[0];
+
+  it('describes the passage exactly once', () => {
+    expect(changesMade.match(/p_wgjogypt60/g) ?? []).toHaveLength(1);
+  });
+
+  it('quotes the passage as the document now has it', () => {
+    expect(changesMade).toContain(CURRENT);
+  });
+
+  it('never shows superseded text as what the passage currently says', () => {
+    expect(changesMade).not.toContain('the true horizon');
+    expect(changesMade).not.toContain(SWAPPED);
+  });
+
+  it('reports a deleted passage as gone rather than quoting the ledger', () => {
+    const withoutTheBlock = buildImpactMessage({
+      documentTitle: 'Twilight',
+      clusters,
+      currentText: new Map([['p_77', candidates[0].text]]),
+      candidates,
+    });
+
+    const section = withoutTheBlock.split('## Candidate passages')[0];
+    expect(section).toContain('p_wgjogypt60 has since been deleted');
+    expect(section).not.toContain('astronomical horizon');
   });
 });
