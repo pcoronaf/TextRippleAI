@@ -115,6 +115,63 @@ describe('clusterChanges', () => {
     expect(clusters[0].label).toContain('2 edits');
   });
 
+  it('keeps a block whole when a sweep is not all that happened to it', () => {
+    /*
+     * The manuscript case: a term is swept through a paragraph, and later the
+     * same paragraph is rewritten more broadly. Two clusters would each speak
+     * about this passage in the present tense, and only one of them could be
+     * telling the truth.
+     */
+    const swapped = 'The sun is already wholly beneath the astronomical horizon.';
+
+    const clusters = clusterChanges([
+      change('p_9', 'The sun is already wholly beneath the true horizon.', swapped),
+      change(
+        'p_9',
+        swapped,
+        'The sun has by then passed wholly beneath the astronomical horizon, refraction aside.',
+        'editorial',
+      ),
+    ]);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].blockIds).toEqual(['p_9']);
+    expect(clusters[0].size).toBe(2);
+  });
+
+  it('never places one block in two conceptual changes', () => {
+    const clusters = clusterChanges([
+      change('p_1', 'the probability rises', 'the likelihood rises'),
+      change('p_2', 'the probability falls', 'the likelihood falls'),
+      change('p_3', 'the probability holds', 'the likelihood holds'),
+      change(
+        'p_2',
+        'the likelihood falls',
+        'A later and much broader rewrite of this passage entirely, in fresh words.',
+        'editorial',
+      ),
+    ]);
+
+    const blockIds = clusters.flatMap((cluster) => cluster.blockIds);
+    expect(new Set(blockIds).size).toBe(blockIds.length);
+
+    // The sweep survives everywhere it was the whole story.
+    const sweep = clusters.find((cluster) => cluster.id.startsWith('swap:'));
+    expect(sweep?.blockIds).toEqual(['p_1', 'p_3']);
+  });
+
+  it('counts a sweep in passages, not in ledger entries', () => {
+    // One paragraph touched twice is one place, however many entries it wrote.
+    const clusters = clusterChanges([
+      change('p_1', 'the probability rises', 'the likelihood rises'),
+      change('p_1', 'the probability falls', 'the likelihood falls'),
+    ]);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].size).toBe(2);
+    expect(clusters[0].label).not.toContain('places');
+  });
+
   it('excludes typographical noise by default', () => {
     const clusters = clusterChanges([
       change('p_1', 'spacing  here', 'spacing here', 'typographical'),
@@ -158,7 +215,7 @@ describe('clusterChanges', () => {
     expect(clusters[0].size).toBe(2);
   });
 
-  it('carries the text as it now reads, for semantic retrieval', () => {
+  it('carries the text each edit left behind, for semantic retrieval', () => {
     const clusters = clusterChanges([
       change('p_1', 'the probability of an incident', 'the likelihood of an incident'),
     ]);

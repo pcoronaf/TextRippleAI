@@ -340,7 +340,8 @@ export async function analyseImpact(
   const clusters = clusterChanges(considered, { includeTrivial: options.includeTrivial });
 
   // --- retrieve and rank ----------------------------------------------------
-  const blocksInDocument = flattenBlocks(content).length;
+  const blocks = flattenBlocks(content);
+  const blocksInDocument = blocks.length;
   const limit = options.candidateLimit ?? candidateLimitFor(blocksInDocument);
   const retrieved = await retrieveCandidates(documentId, content, clusters, limit);
 
@@ -426,6 +427,10 @@ export async function analyseImpact(
     documentTitle: document.title,
     documentBrief: briefs[0]?.content,
     clusters,
+    // The document, not the ledger, is what a passage currently says. The
+    // ledger is a record of what was true at each edit, and the prompt speaks
+    // in the present tense.
+    currentText: new Map(blocks.map((block) => [block.id, block.text])),
     candidates,
     instructions: options.instructions,
   });

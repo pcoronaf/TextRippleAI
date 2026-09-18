@@ -402,6 +402,25 @@ reasoned about. Two rules do it, both local and free:
 Without this, a sweep would produce fifty retrievals and fifty reasoning calls to answer one
 question, and the answers would disagree with each other.
 
+The two rules are applied to a block's whole history since the review boundary, not to each ledger
+entry on its own. A paragraph that was swept and then rewritten more broadly satisfies rule 1 for
+one of its entries and rule 2 for the other, and per-entry it would land in both clusters at once.
+Every cluster is then described to the model in the present tense, so that paragraph would be
+described twice, in two different states, and at most one of them could be true. A block joins a
+sweep only when that sweep is the whole of what happened to it.
+
+### What a passage "now reads" is read from the document
+
+The changes section of the impact prompt says what each changed passage currently says. That
+sentence is taken from the block's current content, never from the ledger entry the cluster was
+built from. A ledger entry records what the passage read after *that* edit, which stops being true
+the moment it is edited again.
+
+This is the more expensive kind of false statement to leave in a prompt: it is specific, it is
+quoted, and a reasoning model has no way to doubt it. A finding derived from it is about text that
+is not in the document, so it cannot be acted on and cannot even be recognised as wrong without
+going back to the passage.
+
 ### The reduction is the point, and it is reported
 
 Everything before the model exists to shrink what the model sees. The analysis record stores
@@ -470,6 +489,13 @@ should stop the next analysis proposing it again.
 - **The semantic arm has no similarity floor.** It contributes its top 40 neighbours regardless of
   how weak the match is, and on a short document that is most of what fills the candidate pool
   before ranking. A threshold needs tuning against a real embedding model rather than guessing.
+- **A block that made two different swaps leaves both sweeps.** Since a block belongs to exactly one
+  cluster, a paragraph where one term was replaced and then a second, unrelated one was, is reported
+  as work on that passage rather than as a member of either sweep. Its vocabulary still reaches
+  retrieval, so nothing is missed; the sweep elsewhere simply lists one fewer place.
+- **A cluster shows one of its passages, not all of them.** A sweep across forty paragraphs is
+  described by its vocabulary and by the current text of the first of them. Showing forty passages
+  would cost more than the reasoning call it feeds.
 
 ---
 
